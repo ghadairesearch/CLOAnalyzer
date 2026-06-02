@@ -7,19 +7,19 @@
 
     <form method="POST" enctype="multipart/form-data">
         <div class="form-group">
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
-                <label class="form-label" style="margin-bottom: 0.5rem;">Course</label>
-                <a href="/course-specification" title="Course not listed" style="display: inline-flex; align-items: center; gap: 0.35rem; color: var(--accent); font-weight: 600; text-decoration: none;">
-                    <span style="display: inline-flex; align-items: center; justify-content: center; width: 1.4rem; height: 1.4rem; border-radius: 9999px; border: 1px solid var(--accent);">?</span>
-                    <span>Can't find course?</span>
+            <label class="form-label">Course</label>
+            <div style="display: flex; align-items: stretch; gap: 0.75rem; flex-wrap: wrap;">
+                <select name="course_name" id="course_select" class="form-control" required style="flex: 1 1 320px; min-width: 0;">
+                    <option value="">Select a course...</option>
+                    {% for course in courses %}
+                        <option value="{{ course.name }}" {% if selected_course_name == course.name %}selected{% endif %}>{{ course.name }}</option>
+                    {% endfor %}
+                </select>
+                <a href="/course-specification" title="Upload course specification PDF" class="btn" style="display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem; white-space: nowrap; padding: 0.75rem 1rem; text-decoration: none;">
+                    <span style="display: inline-flex; align-items: center; justify-content: center; width: 1.25rem; height: 1.25rem; border-radius: 9999px; border: 1px solid currentColor; font-weight: 700;">?</span>
+                    <span>Course not found?</span>
                 </a>
             </div>
-            <select name="course_name" id="course_select" class="form-control" required>
-                <option value="">Select a course...</option>
-                {% for course in courses %}
-                    <option value="{{ course.name }}" {% if selected_course_name == course.name %}selected{% endif %}>{{ course.name }}</option>
-                {% endfor %}
-            </select>
         </div>
 
         <div id="clo_targets_container" style="margin-bottom: 1.5rem;">
