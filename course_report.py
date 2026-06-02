@@ -198,6 +198,8 @@ def value_after_label(lines, labels):
 def clean_clo_text(value):
     value = re.sub(r'\s+', ' ', value or '').strip()
     value = re.sub(r'\s+(Teaching\s+Strategies|Assessment\s+Methods|Code\s+of\s+PLOs|Domain)\b.*$', '', value, flags=re.I).strip()
+    value = re.sub(r'\band\s+along\s+with\b', 'along with', value, flags=re.I)
+    value = re.sub(r'\bdesign\s+create\b', 'Design/Create', value, flags=re.I)
     value = re.sub(r'\bai\b', 'AI', value, flags=re.I)
     if value:
         value = value[0].upper() + value[1:]
@@ -225,11 +227,15 @@ COURSE_SPEC_WORDS = {
     'assess', 'assessments', 'capability', 'complex', 'computational', 'computer',
     'considerations', 'critical', 'datasets', 'decision', 'developments', 'discuss', 'driven',
     'ethical', 'evaluating', 'examine', 'expertise', 'fields', 'for', 'frameworks', 'from', 'ideas',
-    'improve', 'including', 'influence', 'issues', 'machine', 'making', 'management', 'methods',
+    'improve', 'including', 'influence', 'issues', 'machine', 'making', 'manage', 'management', 'methods',
     'multiple', 'new', 'practical', 'predictive', 'privacy', 'procedures', 'purposes',
     'reasoning', 'recent', 'recognize', 'robust', 'science', 'sophisticated', 'special',
     'specialized', 'statistical', 'statistics', 'tackle', 'tech', 'techniques', 'through',
-    'tools', 'topics', 'trends', 'understand', 'utilize'
+    'tools', 'topics', 'trends', 'understand', 'utilize',
+    'align', 'alignment', 'along', 'another', 'choice', 'classify', 'compare', 'concepts',
+    'create', 'demonstrate', 'design', 'effectively', 'explain', 'justify', 'levels',
+    'managing', 'maturity', 'metadata', 'one', 'open', 'practices', 'proficiency',
+    'over', 'quality', 'reuse', 'sharing', 'solution', 'solutions', 'specify', 'standards', 'strategy', 'variety'
 }
 
 COURSE_SPEC_ALIASES = {
@@ -272,9 +278,19 @@ def title_case_course_name(value):
             titled.append(lower[:1].upper() + lower[1:])
     return ' '.join(titled)
 
+def repair_remaining_pdf_fragments(value):
+    def replace_match(match):
+        fragment = match.group(0)
+        segmented = segment_compact_words(fragment)
+        return segmented if segmented else fragment
+
+    return re.sub(r'\b(?:[A-Za-z]{1,4}\s+){2,}[A-Za-z]{1,6}\b', replace_match, value)
+
 def clean_pdf_fragment(value):
     value = re.sub(r'[\x00-\x1f]+', ' ', value or '')
     value = re.sub(r'\\', ' ', value)
+    value = re.sub(r'\s*&\s*', ' and ', value)
+    value = re.sub(r'[/:;]+', ' ', value)
     value = re.sub(r'\s{3,}', '  ', value).strip()
     groups = re.split(r'\s{2,}', value)
     cleaned_groups = []
@@ -294,7 +310,8 @@ def clean_pdf_fragment(value):
         else:
             cleaned_groups.append(group)
 
-    return re.sub(r'\s+', ' ', ' '.join(cleaned_groups)).strip()
+    cleaned = re.sub(r'\s+', ' ', ' '.join(cleaned_groups)).strip()
+    return repair_remaining_pdf_fragments(cleaned)
 
 def extract_course_spec_section(raw_text, start_label, end_label):
     start_matches = list(re.finditer(flexible_label(start_label), raw_text, flags=re.I | re.S))
