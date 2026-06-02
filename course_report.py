@@ -179,15 +179,124 @@ def value_after_label(lines, labels):
 def clean_clo_text(value):
     value = re.sub(r'\s+', ' ', value or '').strip()
     value = re.sub(r'\s+(Teaching|Assessment|Methods?|Code|Domain)\b.*$', '', value, flags=re.I).strip()
+    if value:
+        value = value[0].upper() + value[1:]
     return value
+
+def flexible_label(label):
+    parts = []
+    for char in label:
+        if char.isspace():
+            parts.append(r'\s+')
+        else:
+            parts.append(re.escape(char) + r'\s*')
+    return ''.join(parts)
+
+COURSE_SPEC_WORDS = {
+    'a', 'an', 'and', 'application', 'apply', 'appropriate', 'algorithms', 'as', 'assignment',
+    'assignments', 'basic', 'brainstorming', 'class', 'collaborate', 'course', 'data', 'deletion',
+    'develop', 'different', 'discussion', 'ended', 'evaluate', 'exam', 'exams', 'given', 'homework',
+    'identify', 'implementation', 'in', 'insertion', 'knowledge', 'labs', 'learning', 'lectures',
+    'of', 'on', 'open', 'outcomes', 'problem', 'problems', 'program', 'programming', 'quizzes',
+    'relation', 'rely', 'require', 'requires', 'responsibility', 'searching', 'skills', 'solve',
+    'solving', 'sorting', 'strategies', 'strengths', 'structures', 'such', 'teams', 'that', 'the',
+    'to', 'types', 'understanding', 'values', 'weaknesses', 'with'
+}
+
+COURSE_SPEC_ALIASES = {
+    'evalute': 'evaluate',
+    'sucg': 'such'
+}
+
+def segment_compact_words(value):
+    compact = re.sub(r'[^A-Za-z]', '', value or '').lower()
+    if not compact:
+        return ''
+
+    max_word_length = 18
+    dp = [None] * (len(compact) + 1)
+    dp[0] = (0, [])
+    for start in range(len(compact)):
+        if dp[start] is None:
+            continue
+        for end in range(start + 1, min(len(compact), start + max_word_length) + 1):
+            raw_word = compact[start:end]
+            word = COURSE_SPEC_ALIASES.get(raw_word, raw_word)
+            if word not in COURSE_SPEC_WORDS:
+                continue
+            score = dp[start][0] + len(raw_word) ** 2
+            if dp[end] is None or score > dp[end][0]:
+                dp[end] = (score, dp[start][1] + [word])
+
+    if dp[-1] is None:
+        return ''
+    return ' '.join(dp[-1][1])
+
+def clean_pdf_fragment(value):
+    value = re.sub(r'[\x00-\x1f]+', ' ', value or '')
+    value = re.sub(r'\\', ' ', value)
+    value = re.sub(r'\s{3,}', '  ', value).strip()
+    groups = re.split(r'\s{2,}', value)
+    cleaned_groups = []
+    stopwords = {'of', 'in', 'to', 'on', 'as', 'is', 'be', 'or', 'and', 'the', 'for', 'with', 'that'}
+
+    for group in groups:
+        tokens = [token for token in group.split() if token]
+        small_token_ratio = sum(1 for token in tokens if len(token.strip('.,;:-')) <= 3) / len(tokens) if tokens else 0
+        segmented = segment_compact_words(group) if len(tokens) >= 2 and small_token_ratio > 0.4 else ''
+        if segmented:
+            suffix = ''
+            if re.search(r'\.\s*$', group):
+                suffix = '.'
+            elif re.search(r',\s*$', group):
+                suffix = ','
+            cleaned_groups.append(segmented + suffix)
+        else:
+            cleaned_groups.append(group)
+
+    return re.sub(r'\s+', ' ', ' '.join(cleaned_groups)).strip()
+
+def extract_course_spec_section(raw_text, start_label, end_label):
+    start_matches = list(re.finditer(flexible_label(start_label), raw_text, flags=re.I | re.S))
+    end_matches = list(re.finditer(flexible_label(end_label), raw_text, flags=re.I | re.S))
+    candidates = []
+    for start_match in start_matches:
+        next_end = next((end_match for end_match in end_matches if end_match.start() > start_match.end()), None)
+        if next_end:
+            section = raw_text[start_match.end():next_end.start()]
+            clo_ids = len(re.findall(r'\b[123]\.[1-9]\b', section))
+            candidates.append((clo_ids, len(section), section))
+    if not candidates:
+        return ''
+    return max(candidates, key=lambda item: (item[0], item[1]))[2]
 
 def extract_course_spec_metadata(text):
     lines = [compact_text(line) for line in (text or '').splitlines()]
     lines = [line for line in lines if line]
-    normalized = compact_text(text)
+    raw_text = re.sub(r'[\x00-\x1f]+W\b', ' ', text or '')
+    raw_text = re.sub(r'[\x00-\x1f]+', ' ', raw_text)
+    normalized = compact_text(raw_text)
 
     course_name = value_after_label(lines, ['Course Name', 'Course Title', 'Course'])
     course_code = value_after_label(lines, ['Course Code', 'Course Number', 'Course ID', 'Course No'])
+
+    title_match = re.search(
+        rf'{flexible_label("Course Title")}\s*[:\-\u061b]?\s*(.+?)\s+{flexible_label("Course Code")}',
+        raw_text,
+        flags=re.I | re.S
+    )
+    if title_match:
+        course_name = clean_pdf_fragment(title_match.group(1))
+        if course_name.islower():
+            course_name = course_name.title()
+
+    code_match = re.search(
+        rf'{flexible_label("Course Code")}\s*[:\-\u061b]?\s*(?:\S\s*){{0,12}}?([A-Z](?:\s*[A-Z]){{1,5}}\s*\d(?:\s*\d){{2,3}}[A-Z]?|[A-Z]{{2,5}}\s*\d{{3,4}}[A-Z]?)',
+        raw_text,
+        flags=re.I | re.S
+    )
+    if code_match:
+        course_code = re.sub(r'\s+', '', code_match.group(1)).upper()
 
     if not course_code:
         code_match = re.search(r'\b([A-Z]{2,5}\s*\d{3,4}[A-Z]?)\b', normalized)
@@ -203,14 +312,26 @@ def extract_course_spec_metadata(text):
     line_text = '\n'.join(lines)
     for match in re.finditer(r'(?m)^\s*((?:[123]\.\d+|CLO\s*\d+))\s+(.+)$', line_text, flags=re.I):
         clo_id = re.sub(r'\s+', '', match.group(1).upper())
-        clo_body = clean_clo_text(match.group(2))
+        if re.match(r'^[123]\.0$', clo_id):
+            continue
+        clo_body = clean_clo_text(clean_pdf_fragment(match.group(2)))
         if clo_body and len(clo_body) > 8:
             clo_map[clo_id] = f"{clo_id} {clo_body}"
+
+    section = extract_course_spec_section(raw_text, 'Course Learning Outcomes', 'Course Content')
+    if section:
+        for match in re.finditer(r'\b([123]\.[1-9]\d*)\s+(.+?)\s+\b([KSV]\s*\d+)\b', section, flags=re.I | re.S):
+            clo_id = match.group(1)
+            clo_body = clean_clo_text(clean_pdf_fragment(match.group(2)))
+            if clo_body and len(clo_body) > 8:
+                clo_map[clo_id] = f"{clo_id} {clo_body}"
 
     if not clo_map:
         for match in re.finditer(r'\b([123]\.\d+)\s+(.{12,220}?)(?=\s+[123]\.\d+\s+|\s+CLO\s*\d+\s+|$)', normalized, flags=re.I):
             clo_id = match.group(1)
-            clo_body = clean_clo_text(match.group(2))
+            if re.match(r'^[123]\.0$', clo_id):
+                continue
+            clo_body = clean_clo_text(clean_pdf_fragment(match.group(2)))
             if clo_body:
                 clo_map[clo_id] = f"{clo_id} {clo_body}"
 
@@ -773,6 +894,31 @@ def api_courses():
 def course_specification():
     extracted = None
     if request.method == 'POST':
+        if request.form.get('action') == 'add':
+            course_name = request.form.get('course_name', '').strip()
+            course_code = request.form.get('course_code', '').strip()
+            try:
+                clos = json.loads(request.form.get('clos_json', '[]'))
+            except json.JSONDecodeError:
+                clos = []
+
+            clos = [clo.strip() for clo in clos if isinstance(clo, str) and clo.strip()]
+            display_name = course_name
+            if course_code and course_code not in display_name:
+                display_name = f"{course_name} ({course_code})" if course_name else course_code
+
+            if not display_name or not clos:
+                flash("Please extract a valid course name and CLO list before adding the course.")
+                return redirect(request.url)
+
+            custom_courses = session.get('custom_courses', [])
+            custom_courses = [course for course in custom_courses if course.get('name') != display_name]
+            custom_courses.append({'name': display_name, 'clos': clos})
+            session['custom_courses'] = custom_courses
+            session['selected_course_name'] = display_name
+            flash(f"Added course from specification: {display_name}")
+            return redirect(url_for('index'))
+
         if 'course_spec_file' not in request.files:
             flash("Please upload a course specification PDF.")
             return redirect(request.url)
@@ -802,13 +948,8 @@ def course_specification():
             flash("Could not fully extract the course name/code and CLOs. Please check the PDF text and try again.")
             return render_template('course_specification.html', extracted=extracted)
 
-        custom_courses = session.get('custom_courses', [])
-        custom_courses = [course for course in custom_courses if course.get('name') != extracted['name']]
-        custom_courses.append({'name': extracted['name'], 'clos': extracted['clos']})
-        session['custom_courses'] = custom_courses
-        session['selected_course_name'] = extracted['name']
-        flash(f"Added course from specification: {extracted['name']}")
-        return redirect(url_for('index'))
+        flash("Review the extracted course information, then add it to the course list if it is correct.")
+        return render_template('course_specification.html', extracted=extracted)
 
     return render_template('course_specification.html', extracted=extracted)
 

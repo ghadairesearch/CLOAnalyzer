@@ -22,6 +22,10 @@
             <table>
                 <tbody>
                     <tr>
+                        <th>Course List Name</th>
+                        <td>{{ extracted.name or "-" }}</td>
+                    </tr>
+                    <tr>
                         <th>Course Name</th>
                         <td>{{ extracted.course_name or "-" }}</td>
                     </tr>
@@ -45,6 +49,19 @@
                     </tr>
                 </tbody>
             </table>
+
+            {% if extracted.name and extracted.clos %}
+                <form method="POST" style="margin-top: 1.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap;">
+                    <input type="hidden" name="action" value="add">
+                    <input type="hidden" name="course_name" value="{{ extracted.course_name }}">
+                    <input type="hidden" name="course_code" value="{{ extracted.course_code }}">
+                    <input type="hidden" name="clos_json" value='{{ extracted.clos | tojson | e }}'>
+                    <button type="submit" class="btn">Add Course to List</button>
+                    <a href="/course-specification" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Upload Another PDF</a>
+                </form>
+            {% else %}
+                <p style="color: #b91c1c; font-weight: 600; margin-top: 1rem;">The course cannot be added until the course name and CLO list are detected.</p>
+            {% endif %}
         </div>
     {% endif %}
 </div>
