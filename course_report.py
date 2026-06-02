@@ -79,6 +79,82 @@ def decode_pdf_hex_string(value):
         return raw[2:].decode('utf-16-be', errors='ignore')
     return raw.decode('latin-1', errors='ignore')
 
+def decode_pdf_text_array(array_content):
+    tokens = re.finditer(
+        r'\((?:\\.|[^\\()])*\)|<([0-9A-Fa-f\s]+)>|[-+]?\d*\.?\d+',
+        array_content,
+        flags=re.S
+    )
+    text = ''
+    for token_match in tokens:
+        token = token_match.group(0)
+        if token.startswith('('):
+            text += decode_pdf_string(token[1:-1])
+        elif token.startswith('<'):
+            text += decode_pdf_hex_string(token[1:-1])
+        else:
+            try:
+                spacing_adjustment = abs(float(token))
+            except ValueError:
+                continue
+            if spacing_adjustment > 120 and text and not text.endswith(' '):
+                text += ' '
+    return text
+
+def extract_pdf_block_text(block):
+    text = ''
+    for text_match in re.finditer(
+        r'\[(.*?)\]\s*TJ|\((.*?)\)\s*Tj|<([0-9A-Fa-f\s]+)>\s*Tj',
+        block,
+        flags=re.S
+    ):
+        if text_match.group(1) is not None:
+            text += decode_pdf_text_array(text_match.group(1))
+        elif text_match.group(2) is not None:
+            text += decode_pdf_string(text_match.group(2))
+        elif text_match.group(3) is not None:
+            text += decode_pdf_hex_string(text_match.group(3))
+    return text
+
+def estimate_pdf_text_width(text, font_size):
+    width = 0.0
+    for char in text:
+        if char.isspace():
+            width += font_size * 0.28
+        elif char in 'il.,;:\'!|':
+            width += font_size * 0.25
+        elif char in 'mwMW@#%':
+            width += font_size * 0.75
+        else:
+            width += font_size * 0.50
+    return width
+
+def join_pdf_text_segments(segments):
+    output = []
+    previous = None
+    for segment in segments:
+        text = segment['text']
+        if not text:
+            continue
+        if previous is None:
+            output.append(text.strip())
+            previous = segment
+            continue
+
+        same_line = (
+            previous.get('x') is not None
+            and segment.get('x') is not None
+            and abs((segment.get('y') or 0) - (previous.get('y') or 0)) < 2.0
+        )
+        if same_line:
+            previous_text = output[-1]
+            separator = '' if previous_text.endswith(' ') or text.startswith(' ') else ' '
+            output[-1] = f"{previous_text}{separator}{text.strip()}"
+        else:
+            output.append(text.strip())
+        previous = segment
+    return '\n'.join(part for part in output if part)
+
 def extract_text_from_pdf_streams(pdf_bytes):
     extracted = []
     for match in re.finditer(rb'stream\r?\n(.*?)\r?\nendstream', pdf_bytes, flags=re.S):
@@ -91,16 +167,34 @@ def extract_text_from_pdf_streams(pdf_bytes):
                 continue
 
         content = stream.decode('latin-1', errors='ignore')
-        text_parts = []
-        for array_match in re.finditer(r'\[(.*?)\]\s*TJ', content, flags=re.S):
-            array_content = array_match.group(1)
-            text_parts.extend(decode_pdf_string(s) for s in re.findall(r'\((.*?)\)', array_content, flags=re.S))
-            text_parts.extend(decode_pdf_hex_string(s) for s in re.findall(r'<([0-9A-Fa-f\s]+)>', array_content))
-        text_parts.extend(decode_pdf_string(s) for s in re.findall(r'\((.*?)\)\s*Tj', content, flags=re.S))
-        text_parts.extend(decode_pdf_hex_string(s) for s in re.findall(r'<([0-9A-Fa-f\s]+)>\s*Tj', content))
+        segments = []
+        for block_match in re.finditer(r'BT(.*?)ET', content, flags=re.S):
+            block = block_match.group(1)
+            block_text = extract_pdf_block_text(block)
+            if not block_text.strip():
+                continue
 
-        if text_parts:
-            extracted.append(' '.join(part for part in text_parts if part.strip()))
+            font_match = re.findall(r'/[A-Za-z0-9]+\s+([0-9.]+)\s+Tf', block)
+            font_size = float(font_match[-1]) if font_match else 10.0
+            matrix_match = re.findall(
+                r'[-+]?[0-9.]+\s+[-+]?[0-9.]+\s+[-+]?[0-9.]+\s+[-+]?[0-9.]+\s+([-+]?[0-9.]+)\s+([-+]?[0-9.]+)\s+Tm',
+                block
+            )
+            x = y = None
+            if matrix_match:
+                x = float(matrix_match[-1][0])
+                y = float(matrix_match[-1][1])
+
+            segments.append({
+                'text': block_text,
+                'x': x,
+                'y': y,
+                'font_size': font_size,
+                'end_x': (x + estimate_pdf_text_width(block_text, font_size)) if x is not None else None
+            })
+
+        if segments:
+            extracted.append(join_pdf_text_segments(segments))
 
     return '\n'.join(extracted)
 
@@ -198,9 +292,14 @@ def value_after_label(lines, labels):
 def clean_clo_text(value):
     value = re.sub(r'\s+', ' ', value or '').strip()
     value = re.sub(r'\s+(Teaching\s+Strategies|Assessment\s+Methods|Code\s+of\s+PLOs|Domain)\b.*$', '', value, flags=re.I).strip()
+    value = re.sub(r'\bdat\s+a\b|\bda\s+ta\b', 'data', value, flags=re.I)
+    value = re.sub(r'\bsucg\b', 'such', value, flags=re.I)
+    value = re.sub(r'\bevalute\b', 'evaluate', value, flags=re.I)
+    value = re.sub(r'\s+-\s+', '-', value)
     value = re.sub(r'\band\s+along\s+with\b', 'along with', value, flags=re.I)
     value = re.sub(r'\bdesign\s+create\b', 'Design/Create', value, flags=re.I)
     value = re.sub(r'\bai\b', 'AI', value, flags=re.I)
+    value = re.sub(r'\s+([,.;:])', r'\1', value)
     if value:
         value = value[0].upper() + value[1:]
     return value
@@ -284,7 +383,28 @@ def repair_remaining_pdf_fragments(value):
         segmented = segment_compact_words(fragment)
         return segmented if segmented else fragment
 
-    return re.sub(r'\b(?:[A-Za-z]{1,4}\s+){2,}[A-Za-z]{1,6}\b', replace_match, value)
+    value = re.sub(r'\b(?:[A-Za-z]{1,4}\s+){2,}[A-Za-z]{1,6}\b', replace_match, value)
+    value = re.sub(r'\b([A-Za-z]+men)\s+t\b', lambda m: m.group(1) + 't', value, flags=re.I)
+    value = re.sub(r'\b([A-Za-z]+ica)\s+l\b', lambda m: m.group(1) + 'l', value, flags=re.I)
+    value = re.sub(
+        r'\b(algorithm|application|concept|dataset|format|level|method|practice|procedure|solution|structure|system)\s+s\b',
+        lambda m: m.group(1) + 's',
+        value,
+        flags=re.I
+    )
+    value = re.sub(r'\b([A-Za-z]{3,})\s+([bcdefghjklmnopqrstuvwxyz])\b(?=\s*(?:[.,;:]|$))', lambda m: m.group(1) + m.group(2), value)
+    value = re.sub(
+        r'\b([A-Za-z]{2,})\s+(ated|ence|hms|rstanding|edictive|soning|ment|tion|sion|tions|sions)\b',
+        lambda m: m.group(1) + m.group(2),
+        value,
+        flags=re.I
+    )
+    value = re.sub(r'\b([B-HJ-Zb-hj-km-ru-z])\s+([a-z]{3,})\b', lambda m: m.group(1) + m.group(2), value)
+    value = re.sub(r'\bdat\s+a\b|\bda\s+ta\b', 'data', value, flags=re.I)
+    value = re.sub(r'\ba\s+lgorithm(s?)\b', r'algorithm\1', value, flags=re.I)
+    value = re.sub(r'\balgorithm\s+s\b', 'algorithms', value, flags=re.I)
+    value = re.sub(r'\bs\s+tandards\b', 'standards', value, flags=re.I)
+    return value
 
 def clean_pdf_fragment(value):
     value = re.sub(r'[\x00-\x1f]+', ' ', value or '')
