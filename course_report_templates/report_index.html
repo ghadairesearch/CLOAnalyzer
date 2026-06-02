@@ -57,31 +57,28 @@
 
         <div class="form-group">
             <label class="form-label">Assessment Files</label>
-            <p style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0;">Upload at least one assessment file. CSV and Excel files are supported.</p>
-            <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem;">
-                <div>
-                    <label class="form-label" style="font-size: 0.9rem;">Quizzes</label>
-                    <input type="file" name="quiz_files" class="form-control assessment-file" accept=".csv,.xlsx,.xls" multiple style="padding: 0.5rem;">
-                    <small style="color: var(--text-muted); display: block; margin-top: 0.35rem;">Files are labeled Quiz 1, Quiz 2, Quiz 3.</small>
-                </div>
-                <div>
-                    <label class="form-label" style="font-size: 0.9rem;">Assignments</label>
-                    <input type="file" name="assignment_files" class="form-control assessment-file" accept=".csv,.xlsx,.xls" multiple style="padding: 0.5rem;">
-                    <small style="color: var(--text-muted); display: block; margin-top: 0.35rem;">Files are labeled Assignment 1, Assignment 2.</small>
-                </div>
-                <div>
-                    <label class="form-label" style="font-size: 0.9rem;">Midterm</label>
-                    <input type="file" name="midterm_file" class="form-control assessment-file" accept=".csv,.xlsx,.xls" style="padding: 0.5rem;">
-                </div>
-                <div>
-                    <label class="form-label" style="font-size: 0.9rem;">Final</label>
-                    <input type="file" name="final_file" class="form-control assessment-file" accept=".csv,.xlsx,.xls" style="padding: 0.5rem;">
-                </div>
-                <div>
-                    <label class="form-label" style="font-size: 0.9rem;">Project</label>
-                    <input type="file" name="project_file" class="form-control assessment-file" accept=".csv,.xlsx,.xls" style="padding: 0.5rem;">
+            <p style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0;">Upload at least one assessment file. Select the assessment type for each file.</p>
+            <div id="assessment_rows" style="display: grid; gap: 0.75rem;">
+                <div class="assessment-row" data-row-id="0" style="display: grid; grid-template-columns: minmax(160px, 220px) minmax(240px, 1fr) auto; gap: 0.75rem; align-items: end;">
+                    <input type="hidden" name="assessment_row_ids" value="0">
+                    <div>
+                        <label class="form-label" style="font-size: 0.9rem;">Type</label>
+                        <select name="assessment_type_0" class="form-control">
+                            <option value="Quiz">Quiz</option>
+                            <option value="Assignment">Assignment</option>
+                            <option value="Midterm">Midterm</option>
+                            <option value="Final">Final</option>
+                            <option value="Project">Project</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label" style="font-size: 0.9rem;">File</label>
+                        <input type="file" name="assessment_file_0" class="form-control assessment-file" accept=".csv,.xlsx,.xls" style="padding: 0.5rem;">
+                    </div>
+                    <button type="button" class="btn remove-assessment" style="background-color: var(--border-color); color: var(--text-main); padding: 0.75rem 1rem;">Remove</button>
                 </div>
             </div>
+            <button type="button" id="add_assessment_file" class="btn" style="margin-top: 0.75rem; background-color: var(--accent-secondary);">Add another file</button>
         </div>
 
         <button type="submit" class="btn">Next: Map CLOs</button>
@@ -91,11 +88,13 @@
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         const form = document.querySelector('form');
-        const assessmentFiles = document.querySelectorAll('.assessment-file');
+        const assessmentRows = document.getElementById('assessment_rows');
+        const addAssessmentFile = document.getElementById('add_assessment_file');
         const courseSelect = document.getElementById('course_select');
         const tbKnowledge = document.getElementById('tbody_knowledge');
         const tbSkills = document.getElementById('tbody_skills');
         const tbValues = document.getElementById('tbody_values');
+        let assessmentRowCounter = 1;
         
         let coursesData = [];
         
@@ -109,7 +108,66 @@
                 }
             });
 
+        function updateRemoveButtons() {
+            const rows = assessmentRows.querySelectorAll('.assessment-row');
+            rows.forEach(row => {
+                const button = row.querySelector('.remove-assessment');
+                button.disabled = rows.length === 1;
+                button.style.opacity = rows.length === 1 ? '0.55' : '1';
+            });
+        }
+
+        function createAssessmentRow(rowId) {
+            const row = document.createElement('div');
+            row.className = 'assessment-row';
+            row.dataset.rowId = rowId;
+            row.style.display = 'grid';
+            row.style.gridTemplateColumns = 'minmax(160px, 220px) minmax(240px, 1fr) auto';
+            row.style.gap = '0.75rem';
+            row.style.alignItems = 'end';
+            row.innerHTML = `
+                <input type="hidden" name="assessment_row_ids" value="${rowId}">
+                <div>
+                    <label class="form-label" style="font-size: 0.9rem;">Type</label>
+                    <select name="assessment_type_${rowId}" class="form-control">
+                        <option value="Quiz">Quiz</option>
+                        <option value="Assignment">Assignment</option>
+                        <option value="Midterm">Midterm</option>
+                        <option value="Final">Final</option>
+                        <option value="Project">Project</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label" style="font-size: 0.9rem;">File</label>
+                    <input type="file" name="assessment_file_${rowId}" class="form-control assessment-file" accept=".csv,.xlsx,.xls" style="padding: 0.5rem;">
+                </div>
+                <button type="button" class="btn remove-assessment" style="background-color: var(--border-color); color: var(--text-main); padding: 0.75rem 1rem;">Remove</button>
+            `;
+            return row;
+        }
+
+        addAssessmentFile.addEventListener('click', function() {
+            assessmentRows.appendChild(createAssessmentRow(assessmentRowCounter));
+            assessmentRowCounter += 1;
+            updateRemoveButtons();
+        });
+
+        assessmentRows.addEventListener('click', function(event) {
+            if (!event.target.classList.contains('remove-assessment')) {
+                return;
+            }
+            const rows = assessmentRows.querySelectorAll('.assessment-row');
+            if (rows.length <= 1) {
+                return;
+            }
+            event.target.closest('.assessment-row').remove();
+            updateRemoveButtons();
+        });
+
+        updateRemoveButtons();
+
         form.addEventListener('submit', function(event) {
+            const assessmentFiles = document.querySelectorAll('.assessment-file');
             const hasFile = Array.from(assessmentFiles).some(input => input.files.length > 0);
             if (!hasFile) {
                 event.preventDefault();

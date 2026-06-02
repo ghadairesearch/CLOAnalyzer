@@ -1366,50 +1366,63 @@ def index():
         
         assessment_files = []
 
-        upload_groups = [
-            ('quiz_files', 'Quiz', True),
-            ('assignment_files', 'Assignment', True),
-            ('midterm_file', 'Midterm', False),
-            ('final_file', 'Final', False),
-            ('project_file', 'Project', False)
-        ]
+        allowed_assessment_types = {'Quiz', 'Assignment', 'Midterm', 'Final', 'Project'}
+        pending_uploads = []
+        row_ids = request.form.getlist('assessment_row_ids')
 
-        for field_name, base_label, is_multiple in upload_groups:
-            files = request.files.getlist(field_name) if is_multiple else [request.files.get(field_name)]
-            uploaded_files = [file for file in files if file and file.filename]
+        for row_id in row_ids:
+            file = request.files.get(f'assessment_file_{row_id}')
+            if not file or not file.filename:
+                continue
 
-            for index, file in enumerate(uploaded_files, start=1):
-                label = f"{base_label} {index}" if is_multiple else base_label
+            assessment_type = request.form.get(f'assessment_type_{row_id}', 'Quiz').strip()
+            if assessment_type not in allowed_assessment_types:
+                assessment_type = 'Quiz'
+            pending_uploads.append({'file': file, 'type': assessment_type})
 
-                file_ext = os.path.splitext(file.filename)[1].lower()
-                if file_ext not in {'.csv', '.xlsx', '.xls'}:
-                    flash(f"Invalid {label} file format. Please upload CSV or Excel.")
-                    return redirect(request.url)
+        type_totals = {}
+        for upload in pending_uploads:
+            type_totals[upload['type']] = type_totals.get(upload['type'], 0) + 1
 
-                file_id = str(uuid.uuid4())
-                stored_name = f"{file_id}{file_ext}"
-                filepath = os.path.join(app.config['UPLOAD_FOLDER'], stored_name)
-                file.save(filepath)
+        type_counts = {}
+        for upload in pending_uploads:
+            file = upload['file']
+            base_label = upload['type']
+            type_counts[base_label] = type_counts.get(base_label, 0) + 1
+            if type_totals[base_label] > 1 or base_label in {'Quiz', 'Assignment'}:
+                label = f"{base_label} {type_counts[base_label]}"
+            else:
+                label = base_label
 
-                try:
-                    metrics = infer_spreadsheet_metrics(filepath, file_ext)
-                except Exception:
-                    metrics = {
-                        'questions': [],
-                        'total_questions': 0,
-                        'total_students': 0,
-                        'confidence': 'Low',
-                        'text_sample': '',
-                        'max_scores': {}
-                    }
+            file_ext = os.path.splitext(file.filename)[1].lower()
+            if file_ext not in {'.csv', '.xlsx', '.xls'}:
+                flash(f"Invalid {label} file format. Please upload CSV or Excel.")
+                return redirect(request.url)
 
-                assessment_files.append({
-                    'label': label,
-                    'stored_name': stored_name,
-                    'ext': file_ext,
-                    'original_name': file.filename,
-                    'metrics': metrics
-                })
+            file_id = str(uuid.uuid4())
+            stored_name = f"{file_id}{file_ext}"
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], stored_name)
+            file.save(filepath)
+
+            try:
+                metrics = infer_spreadsheet_metrics(filepath, file_ext)
+            except Exception:
+                metrics = {
+                    'questions': [],
+                    'total_questions': 0,
+                    'total_students': 0,
+                    'confidence': 'Low',
+                    'text_sample': '',
+                    'max_scores': {}
+                }
+
+            assessment_files.append({
+                'label': label,
+                'stored_name': stored_name,
+                'ext': file_ext,
+                'original_name': file.filename,
+                'metrics': metrics
+            })
 
         if not assessment_files:
             flash("Please upload at least one Quiz, Assignment, Midterm, Final, or Project file.")
