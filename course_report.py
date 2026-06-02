@@ -197,7 +197,8 @@ def value_after_label(lines, labels):
 
 def clean_clo_text(value):
     value = re.sub(r'\s+', ' ', value or '').strip()
-    value = re.sub(r'\s+(Teaching|Assessment|Methods?|Code|Domain)\b.*$', '', value, flags=re.I).strip()
+    value = re.sub(r'\s+(Teaching\s+Strategies|Assessment\s+Methods|Code\s+of\s+PLOs|Domain)\b.*$', '', value, flags=re.I).strip()
+    value = re.sub(r'\bai\b', 'AI', value, flags=re.I)
     if value:
         value = value[0].upper() + value[1:]
     return value
@@ -213,13 +214,22 @@ def flexible_label(label):
 
 COURSE_SPEC_WORDS = {
     'a', 'an', 'and', 'application', 'apply', 'appropriate', 'algorithms', 'as', 'assignment',
-    'assignments', 'basic', 'brainstorming', 'class', 'collaborate', 'course', 'data', 'deletion',
+    'assignments', 'basic', 'big', 'brainstorming', 'class', 'collaborate', 'course', 'data', 'deletion',
     'develop', 'different', 'discussion', 'ended', 'evaluate', 'exam', 'exams', 'given', 'homework',
     'identify', 'implementation', 'in', 'insertion', 'knowledge', 'labs', 'learning', 'lectures',
     'of', 'on', 'open', 'outcomes', 'problem', 'problems', 'program', 'programming', 'quizzes',
     'relation', 'rely', 'require', 'requires', 'responsibility', 'searching', 'skills', 'solve',
     'solving', 'sorting', 'strategies', 'strengths', 'structures', 'such', 'teams', 'that', 'the',
-    'to', 'types', 'understanding', 'values', 'weaknesses', 'with'
+    'to', 'types', 'understanding', 'values', 'weaknesses', 'with',
+    'abilities', 'about', 'addressing', 'AI', 'ai', 'analyse', 'analytical', 'applications',
+    'assess', 'assessments', 'capability', 'complex', 'computational', 'computer',
+    'considerations', 'critical', 'datasets', 'decision', 'developments', 'discuss', 'driven',
+    'ethical', 'evaluating', 'examine', 'expertise', 'fields', 'for', 'frameworks', 'from', 'ideas',
+    'improve', 'including', 'influence', 'issues', 'machine', 'making', 'management', 'methods',
+    'multiple', 'new', 'practical', 'predictive', 'privacy', 'procedures', 'purposes',
+    'reasoning', 'recent', 'recognize', 'robust', 'science', 'sophisticated', 'special',
+    'specialized', 'statistical', 'statistics', 'tackle', 'tech', 'techniques', 'through',
+    'tools', 'topics', 'trends', 'understand', 'utilize'
 }
 
 COURSE_SPEC_ALIASES = {
@@ -250,6 +260,17 @@ def segment_compact_words(value):
     if dp[-1] is None:
         return ''
     return ' '.join(dp[-1][1])
+
+def title_case_course_name(value):
+    lowered_words = {'and', 'in', 'of', 'for', 'to', 'with'}
+    titled = []
+    for index, word in enumerate(str(value or '').split()):
+        lower = word.lower()
+        if index > 0 and lower in lowered_words:
+            titled.append(lower)
+        else:
+            titled.append(lower[:1].upper() + lower[1:])
+    return ' '.join(titled)
 
 def clean_pdf_fragment(value):
     value = re.sub(r'[\x00-\x1f]+', ' ', value or '')
@@ -283,7 +304,7 @@ def extract_course_spec_section(raw_text, start_label, end_label):
         next_end = next((end_match for end_match in end_matches if end_match.start() > start_match.end()), None)
         if next_end:
             section = raw_text[start_match.end():next_end.start()]
-            clo_ids = len(re.findall(r'\b[123]\.[1-9]\b', section))
+            clo_ids = len(re.findall(r'\b[123]\s*\.\s*[1-9]\d*\b', section))
             candidates.append((clo_ids, len(section), section))
     if not candidates:
         return ''
@@ -307,7 +328,7 @@ def extract_course_spec_metadata(text):
     if title_match:
         course_name = clean_pdf_fragment(title_match.group(1))
         if course_name.islower():
-            course_name = course_name.title()
+            course_name = title_case_course_name(course_name)
 
     code_match = re.search(
         rf'{flexible_label("Course Code")}\s*[:\-\u061b]?\s*(?:\S\s*){{0,12}}?([A-Z](?:\s*[A-Z]){{1,5}}\s*\d(?:\s*\d){{2,3}}[A-Z]?|[A-Z]{{2,5}}\s*\d{{3,4}}[A-Z]?)',
@@ -339,8 +360,8 @@ def extract_course_spec_metadata(text):
 
     section = extract_course_spec_section(raw_text, 'Course Learning Outcomes', 'Course Content')
     if section:
-        for match in re.finditer(r'\b([123]\.[1-9]\d*)\s+(.+?)\s+\b([KSV]\s*\d+)\b', section, flags=re.I | re.S):
-            clo_id = match.group(1)
+        for match in re.finditer(r'\b([123]\s*\.\s*[1-9]\d*)\s+(.+?)\s+\b([KSV]\s*\d+)\b', section, flags=re.I | re.S):
+            clo_id = re.sub(r'\s+', '', match.group(1))
             clo_body = clean_clo_text(clean_pdf_fragment(match.group(2)))
             if clo_body and len(clo_body) > 8:
                 clo_map[clo_id] = f"{clo_id} {clo_body}"
