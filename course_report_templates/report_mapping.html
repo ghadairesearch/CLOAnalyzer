@@ -1,26 +1,74 @@
 {% extends "base.html" %}
 
 {% block content %}
+<style>
+    .mapping-file-box {
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background: #f9fafb;
+        margin-bottom: 1.25rem;
+        overflow: hidden;
+    }
+
+    .mapping-file-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 1rem;
+        padding: 1rem;
+        background: var(--bg-card);
+        border-bottom: 1px solid var(--border-color);
+        flex-wrap: wrap;
+    }
+
+    .mapping-file-title {
+        margin: 0;
+        color: var(--accent);
+        font-size: 1.1rem;
+    }
+
+    .mapping-file-meta {
+        color: var(--text-muted);
+        font-size: 0.875rem;
+        margin-top: 0.25rem;
+    }
+
+    .mapping-file-counts {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+    }
+
+    .mapping-file-count {
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        padding: 0.35rem 0.6rem;
+        background: #f9fafb;
+        color: var(--text-muted);
+        font-size: 0.85rem;
+    }
+
+    .mapping-file-table {
+        margin: 0;
+        background: var(--bg-card);
+    }
+
+    @media (max-width: 760px) {
+        .mapping-file-box {
+            overflow-x: auto;
+        }
+    }
+</style>
+
 <div class="card">
     <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
         <h2 style="margin-top: 0;">Map Questions to CLOs</h2>
-        <a href="/" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Back to Upload</a>
+        <a href="/back-to-upload" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Back to Upload</a>
     </div>
     <p style="color: var(--text-muted); margin-bottom: 2rem;">
         For course: <strong>{{ course_name }}</strong><br>
         We detected the following questions across the uploaded assessment file(s). Assign one or more CLOs to each question.
     </p>
-
-    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
-        <div style="border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; background: #f9fafb;">
-            <span style="display: block; color: var(--text-muted); font-size: 0.875rem;">Questions</span>
-            <strong style="font-size: 1.5rem; color: var(--accent);">{{ total_questions }}</strong>
-        </div>
-        <div style="border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; background: #f9fafb;">
-            <span style="display: block; color: var(--text-muted); font-size: 0.875rem;">Students</span>
-            <strong style="font-size: 1.5rem; color: var(--accent);">{{ total_students }}</strong>
-        </div>
-    </div>
 
     {% if student_count_warning %}
         <div class="alert" style="border-color: var(--danger); color: var(--danger); background: rgba(239, 68, 68, 0.08);">
@@ -29,37 +77,60 @@
     {% endif %}
 
     <form method="POST" action="/mapping">
-        <table>
-            <thead>
-                <tr>
-                    <th style="width: 160px;">Question</th>
-                    <th>Course Learning Outcome (CLO)</th>
-                    <th style="width: 160px;">Max Score</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for col in columns %}
-                <tr>
-                    <td><strong>{{ col }}</strong></td>
-                    <td>
-                        <select name="clo_{{ col }}" class="form-control" multiple size="5" style="padding: 0.5rem; background: var(--bg-base);">
-                            {% for clo in clos %}
-                                <option value="{{ clo }}" {% if existing_mapping.get(col) and clo in existing_mapping.get(col).get('clos', []) %}selected{% endif %}>{{ clo }}</option>
-                            {% endfor %}
-                        </select>
-                        <small style="color: var(--text-muted); display: block; margin-top: 0.4rem;">Hold Ctrl to select multiple CLOs.</small>
-                        <input type="text" class="form-control selected-clo-ids" style="margin-top: 0.5rem;" value="" placeholder="Selected CLO ID" readonly>
-                    </td>
-                    <td>
-                        <input type="number" step="0.5" min="0" name="max_{{ col }}" class="form-control" style="padding: 0.5rem;" value="{{ existing_mapping.get(col, {}).get('max_score', max_scores.get(col, 1)) }}" readonly>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        {% for group in mapping_groups %}
+            <section class="mapping-file-box">
+                <div class="mapping-file-header">
+                    <div>
+                        <h3 class="mapping-file-title">{{ group.label }}</h3>
+                        {% if group.original_name %}
+                            <div class="mapping-file-meta">{{ group.original_name }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="mapping-file-counts">
+                        <span class="mapping-file-count">{{ group.total_questions }} questions</span>
+                        {% if group.total_students %}
+                            <span class="mapping-file-count">{{ group.total_students }} students</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <table class="mapping-file-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 160px;">Question</th>
+                            <th>Course Learning Outcome (CLO)</th>
+                            <th style="width: 160px;">Max Score</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in group.columns %}
+                            {% set col = item.value %}
+                            <tr>
+                                <td>
+                                    <strong>{{ item.display }}</strong>
+                                </td>
+                                <td>
+                                    <select name="clo_{{ col }}" class="form-control" multiple size="5" style="padding: 0.5rem; background: var(--bg-base);">
+                                        {% for clo in clos %}
+                                            <option value="{{ clo }}" {% if existing_mapping.get(col) and clo in existing_mapping.get(col).get('clos', []) %}selected{% endif %}>{{ clo }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <small style="color: var(--text-muted); display: block; margin-top: 0.4rem;">Hold Ctrl to select multiple CLOs.</small>
+                                    <input type="text" class="form-control selected-clo-ids" style="margin-top: 0.5rem;" value="" placeholder="Selected CLO ID" readonly>
+                                </td>
+                                <td>
+                                    <input type="number" step="0.5" min="0" name="max_{{ col }}" class="form-control" style="padding: 0.5rem;" value="{{ existing_mapping.get(col, {}).get('max_score', max_scores.get(col, 1)) }}" readonly>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </section>
+        {% else %}
+            <div class="alert">No questions were detected. Please go back and upload a valid grades file.</div>
+        {% endfor %}
 
         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-            <a href="/" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Back</a>
+            <a href="/back-to-upload" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Back</a>
             <button type="submit" class="btn">Calculate CLO Achievement</button>
         </div>
     </form>

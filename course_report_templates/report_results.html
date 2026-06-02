@@ -11,7 +11,7 @@
         </div>
         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end;">
             <a href="/mapping" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Back to Mapping</a>
-            <a href="/" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Start Over</a>
+            <a href="/start-over" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Start Over</a>
         </div>
     </div>
 
@@ -37,7 +37,10 @@
             {% for clo, data in stats.items() %}
             <tr>
                 <td><strong>{{ clo }}</strong></td>
-                <td style="color: var(--text-muted); font-size: 0.875rem;">{% for question in data.questions %}{{ format_question_label(question) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+                <td style="color: var(--text-muted); font-size: 0.875rem;">
+                    {{ format_mapped_questions_for_report(data.questions) }}
+                    <div style="font-size: 0.8rem; margin-top: 0.25rem;">{{ data.questions|length }} mapped question{% if data.questions|length != 1 %}s{% endif %}</div>
+                </td>
                 <td>{{ data.total_possible_score }}</td>
                 <td>{{ "%.2f"|format(data.target_score) }} <span style="color: var(--text-muted); font-size: 0.8em;">({{ "%.2f"|format(data.target_pct) }}%)</span></td>
                 <td>{{ data.students_achieved }}</td>

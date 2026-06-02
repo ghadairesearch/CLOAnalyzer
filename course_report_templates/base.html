@@ -118,6 +118,12 @@
             font-weight: 500;
         }
 
+        .alert-error {
+            background-color: rgba(239, 68, 68, 0.08);
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
@@ -166,10 +172,10 @@
         <h1>CLO Attainment Report Generator</h1>
     </div>
     <div class="container">
-        {% with messages = get_flashed_messages() %}
+        {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
-                {% for message in messages %}
-                    <div class="alert">{{ message }}</div>
+                {% for category, message in messages %}
+                    <div class="alert {% if category in ['error', 'danger'] %}alert-error{% endif %}">{{ message }}</div>
                 {% endfor %}
             {% endif %}
         {% endwith %}

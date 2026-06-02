@@ -636,17 +636,94 @@ def find_question_header_row(df):
             best = {'row_position': row_position, 'question_cells': question_cells}
     return best if best and len(best['question_cells']) >= 2 else None
 
-def count_students_from_question_sheet(df, header_info):
+def normalize_report_label(value):
+    text = '' if pd.isna(value) else str(value).strip()
+    text = re.sub(r'[\u064b-\u065f\u0670]', '', text)
+    text = text.replace('أ', 'ا').replace('إ', 'ا').replace('آ', 'ا')
+    text = text.replace('ؤ', 'و').replace('ئ', 'ي').replace('ة', 'ه')
+    return re.sub(r'\s+', ' ', text).strip().lower()
+
+def is_answer_key_label(value):
+    label = normalize_report_label(value)
+    compact = re.sub(r'\s+', '', label)
+    return bool(
+        re.search(r'answer\s*key|key\s*answers?', label, flags=re.I)
+        or ('مفتاح' in label and ('اجابه' in label or 'اجابات' in label))
+        or compact in {'مفتاحالاجابه', 'مفتاحالاجابات'}
+    )
+
+def is_summary_row_label(value):
+    label = normalize_report_label(value)
+    if not label:
+        return False
+    if re.search(r'^(mean|average|median|total|subtotal|score|percent|percentage)$', label, flags=re.I):
+        return True
+    return any(term in label for term in [
+        'متوسط',
+        'المتوسط',
+        'اجمالي',
+        'الاجمالي',
+        'نسبه ميويه',
+        'النسبه الميويه',
+        'الدرجه الوسيطه',
+        'احصاءات'
+    ])
+
+def get_question_sheet_rows(df, header_info):
     answer_columns = [col for col, _, _ in header_info['question_cells']]
-    count = 0
+    first_answer_column = min(answer_columns) if answer_columns else 0
+    answer_key = None
+    student_rows = []
+
     for _, row in df.iloc[header_info['row_position'] + 1:].iterrows():
         first_value = '' if pd.isna(row.iloc[0]) else str(row.iloc[0]).strip()
-        if re.search(r'^(answer\s+key|mean|average|median|total)$', first_value, flags=re.I):
+        populated_answers = sum(
+            0 if pd.isna(row[col]) or str(row[col]).strip() == '' else 1
+            for col in answer_columns
+        )
+        if is_answer_key_label(first_value):
+            answer_key = row
             continue
-        populated_answers = sum(0 if pd.isna(row[col]) or str(row[col]).strip() == '' else 1 for col in answer_columns)
-        if populated_answers > 0:
-            count += 1
-    return count
+        if is_summary_row_label(first_value):
+            continue
+
+        has_student_metadata = any(
+            not pd.isna(row.iloc[col]) and str(row.iloc[col]).strip() != ''
+            for col in range(first_answer_column)
+        )
+        if populated_answers == 0 and not has_student_metadata:
+            continue
+        student_rows.append(row)
+
+    return answer_key, student_rows
+
+def count_students_from_question_sheet(df, header_info):
+    _, student_rows = get_question_sheet_rows(df, header_info)
+    return len(student_rows)
+
+def summarize_question_sheet_performance(df, header_info):
+    answer_key, student_rows = get_question_sheet_rows(df, header_info)
+    if answer_key is None or not student_rows:
+        return {}
+
+    performance = {}
+    for col_index, number, _ in header_info['question_cells']:
+        question = f'Q{number}'
+        correct_answer = normalize_answer(answer_key[col_index])
+        if not correct_answer:
+            continue
+
+        correct_count = sum(
+            1
+            for row in student_rows
+            if normalize_answer(row[col_index]) == correct_answer
+        )
+        performance[question] = {
+            'students_answered': len(student_rows),
+            'students_correct': correct_count,
+            'correct_percentage': round((correct_count / len(student_rows)) * 100, 2)
+        }
+    return performance
 
 def infer_simple_table_metrics(df):
     clean_df = df.dropna(how='all')
@@ -656,13 +733,16 @@ def infer_simple_table_metrics(df):
     header_info = find_question_header_row(clean_df)
     if header_info:
         questions = [f'Q{number}' for _, number, _ in sorted(header_info['question_cells'], key=lambda item: item[1])]
+        total_students = count_students_from_question_sheet(clean_df, header_info)
+        performance = summarize_question_sheet_performance(clean_df, header_info)
         return {
             'questions': questions,
             'total_questions': len(questions),
-            'total_students': count_students_from_question_sheet(clean_df, header_info),
+            'total_students': total_students,
             'confidence': 'High',
             'text_sample': '',
-            'max_scores': {question: 1.0 for question in questions}
+            'max_scores': {question: 1.0 for question in questions},
+            'question_performance': performance
         }
 
     df_with_headers = clean_df.copy()
@@ -713,6 +793,12 @@ def infer_simple_table_metrics(df):
     return None
 
 def infer_spreadsheet_metrics(filepath, file_ext):
+    if file_ext == '.pdf':
+        text = extract_pdf_text(filepath)
+        metrics = infer_pdf_grade_metrics(text)
+        if metrics:
+            return metrics
+
     if file_ext == '.csv':
         df = pd.read_csv(filepath, header=None)
         metrics = infer_simple_table_metrics(df)
@@ -742,11 +828,122 @@ def infer_spreadsheet_metrics(filepath, file_ext):
         'max_scores': {}
     }
 
+PDF_GRADE_ROW_PATTERN = re.compile(
+    r'(?:^|\s)(\d{1,3})\s+.*?\s+(-?\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)(?=\s+\d{1,3}\s+|$)'
+)
+
+def parse_pdf_grade_report_text(text):
+    rows = []
+    max_scores = {}
+    for line in (text or '').splitlines():
+        if 'Stu Pts Poss' not in line:
+            continue
+
+        body = line.split('Stu Pts Poss', 1)[1]
+        score_row = {}
+        for match in PDF_GRADE_ROW_PATTERN.finditer(body):
+            number = int(match.group(1))
+            score = float(match.group(2))
+            possible = float(match.group(3))
+            if number <= 0:
+                continue
+            question = f'Q{number}'
+            score_row[question] = score
+            max_scores[question] = max(max_scores.get(question, 0.0), possible)
+
+        if len(score_row) >= 2:
+            rows.append(score_row)
+
+    if not rows:
+        return None, {}
+
+    questions = sorted(max_scores.keys(), key=lambda question: int(question[1:]))
+    score_df = pd.DataFrame(rows).reindex(columns=questions).fillna(0)
+    score_df = apply_student_id_index(score_df, [f"__missing_student_{index + 1}" for index in range(len(score_df))])
+    return score_df, max_scores
+
+def infer_pdf_grade_metrics(text):
+    score_df, max_scores = parse_pdf_grade_report_text(text)
+    if score_df is None or score_df.empty:
+        return None
+
+    questions = list(score_df.columns)
+    performance = {}
+    total_students = len(score_df)
+    for question in questions:
+        possible = max_scores.get(question, 1.0) or 1.0
+        values = pd.to_numeric(score_df[question], errors='coerce').fillna(0)
+        correct_count = int((values >= possible).sum())
+        performance[question] = {
+            'students_answered': total_students,
+            'students_correct': correct_count,
+            'correct_percentage': round((correct_count / total_students) * 100, 2) if total_students else 0
+        }
+
+    return {
+        'questions': questions,
+        'total_questions': len(questions),
+        'total_students': total_students,
+        'confidence': 'High',
+        'text_sample': 'Detected from PDF score sections labeled Stu Pts Poss. Student IDs were not exposed in the PDF text, so anonymous per-file rows are used for this PDF.',
+        'max_scores': max_scores,
+        'question_performance': performance
+    }
+
 def normalize_answer(value):
     if pd.isna(value):
         return ''
     text = str(value).strip().upper()
     return re.sub(r'\s+', '', text)
+
+def normalize_student_id(value):
+    if pd.isna(value):
+        return ''
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    text = str(value).strip()
+    if re.match(r'^\d+\.0$', text):
+        text = text[:-2]
+    return re.sub(r'\s+', '', text)
+
+def detect_student_id_column(df, question_columns):
+    question_columns = set(question_columns or [])
+    candidates = [col for col in df.columns if col not in question_columns]
+    if not candidates:
+        return None
+
+    preferred_patterns = [
+        r'\bstudent\b',
+        r'\bstudent\s*id\b',
+        r'\bid\b',
+        r'\bnumber\b',
+        r'\bname\b',
+        r'الطلاب',
+        r'الطالب',
+        r'رقم'
+    ]
+    for col in candidates:
+        label = str(col).strip()
+        if any(re.search(pattern, label, flags=re.I) for pattern in preferred_patterns):
+            return col
+
+    return candidates[0]
+
+def apply_student_id_index(score_df, student_ids):
+    normalized_ids = []
+    seen = {}
+    for position, raw_id in enumerate(student_ids):
+        student_id = normalize_student_id(raw_id)
+        if not student_id:
+            student_id = f"__missing_student_{position + 1}"
+        seen[student_id] = seen.get(student_id, 0) + 1
+        if seen[student_id] > 1:
+            student_id = f"{student_id}__{seen[student_id]}"
+        normalized_ids.append(student_id)
+
+    score_df = score_df.reset_index(drop=True)
+    score_df.index = normalized_ids[:len(score_df)]
+    return score_df
 
 def build_scores_from_question_sheet(df, requested_questions):
     clean_df = df.dropna(how='all')
@@ -766,26 +963,22 @@ def build_scores_from_question_sheet(df, requested_questions):
     if not question_columns:
         return None
 
-    rows_after_header = clean_df.iloc[header_info['row_position'] + 1:]
-    answer_key = None
+    answer_key_row, student_rows = get_question_sheet_rows(clean_df, header_info)
     score_rows = []
 
-    for _, row in rows_after_header.iterrows():
-        first_value = '' if pd.isna(row.iloc[0]) else str(row.iloc[0]).strip()
-        if re.search(r'^answer\s+key$', first_value, flags=re.I):
-            answer_key = {
-                question: normalize_answer(row[col_index])
-                for question, col_index in question_columns.items()
-            }
-            continue
-        if re.search(r'^(mean|average|median|total)$', first_value, flags=re.I):
-            continue
+    answer_key = None
+    if answer_key_row is not None:
+        answer_key = {
+            question: normalize_answer(answer_key_row[col_index])
+            for question, col_index in question_columns.items()
+        }
 
+    for row in student_rows:
         populated_answers = sum(
             0 if pd.isna(row[col_index]) or str(row[col_index]).strip() == '' else 1
             for col_index in question_columns.values()
         )
-        if populated_answers == 0:
+        if populated_answers == 0 and not answer_key:
             continue
 
         if answer_key:
@@ -801,15 +994,30 @@ def build_scores_from_question_sheet(df, requested_questions):
 
     if not score_rows:
         return None
-    return pd.DataFrame(score_rows), 'binary' if answer_key else 'numeric'
+    score_df = pd.DataFrame(score_rows)
+    student_ids = [row.iloc[0] if len(row) else '' for row in student_rows]
+    return apply_student_id_index(score_df, student_ids), 'binary' if answer_key else 'numeric'
 
 def build_score_dataframe(filepath, file_ext, requested_questions):
     requested_questions = list(requested_questions)
 
+    if file_ext == '.pdf':
+        text = extract_pdf_text(filepath)
+        score_df, _ = parse_pdf_grade_report_text(text)
+        if score_df is not None:
+            available_questions = [question for question in requested_questions if question in score_df.columns]
+            if available_questions:
+                return score_df[available_questions].apply(pd.to_numeric, errors='coerce').fillna(0), 'binary'
+        return pd.DataFrame(columns=requested_questions), 'binary'
+
     if file_ext == '.csv':
         df = pd.read_csv(filepath)
         if all(question in df.columns for question in requested_questions):
-            return df[requested_questions].apply(pd.to_numeric, errors='coerce').fillna(0), 'numeric'
+            score_df = df[requested_questions].apply(pd.to_numeric, errors='coerce').fillna(0)
+            id_column = detect_student_id_column(df, requested_questions)
+            if id_column is not None:
+                score_df = apply_student_id_index(score_df, df[id_column].tolist())
+            return score_df, 'numeric'
 
         raw_df = pd.read_csv(filepath, header=None)
         scores = build_scores_from_question_sheet(raw_df, requested_questions)
@@ -818,7 +1026,11 @@ def build_score_dataframe(filepath, file_ext, requested_questions):
     else:
         df = pd.read_excel(filepath)
         if all(question in df.columns for question in requested_questions):
-            return df[requested_questions].apply(pd.to_numeric, errors='coerce').fillna(0), 'numeric'
+            score_df = df[requested_questions].apply(pd.to_numeric, errors='coerce').fillna(0)
+            id_column = detect_student_id_column(df, requested_questions)
+            if id_column is not None:
+                score_df = apply_student_id_index(score_df, df[id_column].tolist())
+            return score_df, 'numeric'
 
         workbook = pd.ExcelFile(filepath)
         for sheet_name in workbook.sheet_names:
@@ -835,6 +1047,7 @@ def prefixed_question(assessment_name, question):
 def combine_assessment_metrics(assessment_files):
     combined_questions = []
     combined_max_scores = {}
+    combined_question_performance = {}
     total_students = 0
     notes = []
     student_counts = {}
@@ -853,6 +1066,8 @@ def combine_assessment_metrics(assessment_files):
             combined = prefixed_question(assessment['label'], question)
             combined_questions.append(combined)
             combined_max_scores[combined] = metrics.get('max_scores', {}).get(question, 1.0)
+            if metrics.get('question_performance', {}).get(question):
+                combined_question_performance[combined] = metrics['question_performance'][question]
 
         total_students = max(total_students, metrics.get('total_students') or 0)
         if metrics.get('text_sample'):
@@ -862,7 +1077,10 @@ def combine_assessment_metrics(assessment_files):
     student_count_warning = ''
     if len(set(nonzero_counts.values())) > 1:
         count_text = ', '.join(f"{label}: {count}" for label, count in nonzero_counts.items())
-        student_count_warning = f"Student count mismatch across uploaded files ({count_text}). One or more files may have missing students. You can continue, but results will use the matched rows available across the selected files."
+        student_count_warning = f"Student count mismatch across uploaded files ({count_text}). Results match students by ID across files and count any missing assessment score as 0."
+    student_matching_warning = get_student_matching_warning(assessment_files)
+    if student_matching_warning:
+        student_count_warning = student_matching_warning
 
     return {
         'questions': combined_questions,
@@ -871,6 +1089,7 @@ def combine_assessment_metrics(assessment_files):
         'confidence': confidence,
         'text_sample': ' '.join(notes),
         'max_scores': combined_max_scores,
+        'question_performance': combined_question_performance,
         'student_counts': student_counts,
         'student_count_warning': student_count_warning
     }
@@ -894,14 +1113,64 @@ def build_combined_score_dataframe(assessment_files, requested_questions):
         score_df, _ = build_score_dataframe(filepath, assessment['ext'], local_questions)
         if score_df.empty:
             continue
-        frames.append(score_df.rename(columns=rename_map))
+        score_df = score_df.rename(columns=rename_map)
+        score_df.index = [
+            f"{assessment['label']}:{student_id}" if str(student_id).startswith("__missing_student_") else str(student_id)
+            for student_id in score_df.index
+        ]
+        frames.append(score_df)
 
     if not frames:
         return pd.DataFrame(columns=list(requested_questions)), 'binary'
 
-    min_rows = min(len(frame) for frame in frames)
-    normalized_frames = [frame.reset_index(drop=True).iloc[:min_rows] for frame in frames]
-    return pd.concat(normalized_frames, axis=1).fillna(0), 'binary'
+    return pd.concat(frames, axis=1, join='outer').fillna(0), 'binary'
+
+def get_assessment_student_ids(assessment, requested_questions=None):
+    questions = requested_questions or (assessment.get('metrics', {}).get('questions') or [])
+    if not questions:
+        return set()
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], assessment['stored_name'])
+    score_df, _ = build_score_dataframe(filepath, assessment['ext'], questions)
+    return {
+        f"{assessment.get('label', 'Assessment')}:{student_id}" if str(student_id).startswith("__missing_student_") else str(student_id)
+        for student_id in score_df.index
+    }
+
+def get_student_matching_warning(assessment_files):
+    if len(assessment_files or []) <= 1:
+        return ''
+
+    student_ids_by_label = {}
+    for assessment in assessment_files:
+        label = assessment.get('label', 'Assessment')
+        try:
+            student_ids_by_label[label] = get_assessment_student_ids(assessment)
+        except Exception:
+            student_ids_by_label[label] = set()
+
+    counts = {
+        label: len(student_ids)
+        for label, student_ids in student_ids_by_label.items()
+        if student_ids
+    }
+    if len(counts) <= 1:
+        return ''
+
+    all_students = set().union(*student_ids_by_label.values()) if student_ids_by_label else set()
+    missing_parts = []
+    for label, student_ids in student_ids_by_label.items():
+        if not student_ids:
+            continue
+        missing_count = len(all_students - student_ids)
+        if missing_count:
+            missing_parts.append(f"{label}: {missing_count} missing")
+
+    if len(set(counts.values())) > 1 or missing_parts:
+        count_text = ', '.join(f"{label}: {count}" for label, count in counts.items())
+        missing_text = f" Missing by file: {', '.join(missing_parts)}." if missing_parts else ''
+        return f"Student mismatch across uploaded files ({count_text}). Results match students by ID across files and count any missing assessment score as 0.{missing_text}"
+
+    return ''
 
 def calculate_clo_results():
     assessment_files = session.get('assessment_files') or []
@@ -978,6 +1247,124 @@ def format_question_label(question):
     if match:
         return f"Question {match.group(1)}"
     return question
+
+def build_mapping_groups(columns, assessment_files):
+    columns = list(columns or [])
+    groups = []
+    grouped_columns = set()
+
+    if assessment_files:
+        for assessment in assessment_files:
+            label = assessment.get('label', 'Assessment')
+            prefix = f"{label} "
+            group_columns = [col for col in columns if str(col).startswith(prefix)]
+            if not group_columns:
+                continue
+            grouped_columns.update(group_columns)
+            groups.append({
+                'label': label,
+                'original_name': assessment.get('original_name', ''),
+                'total_questions': len(group_columns),
+                'total_students': assessment.get('metrics', {}).get('total_students') or 0,
+                'columns': [
+                    {
+                        'value': col,
+                        'display': format_question_label(str(col)[len(prefix):])
+                    }
+                    for col in group_columns
+                ]
+            })
+
+    remaining_columns = [col for col in columns if col not in grouped_columns]
+    if remaining_columns:
+        groups.append({
+            'label': 'Uploaded File',
+            'original_name': '',
+            'total_questions': len(remaining_columns),
+            'total_students': 0,
+            'columns': [
+                {
+                    'value': col,
+                    'display': format_question_label(col)
+                }
+                for col in remaining_columns
+            ]
+        })
+
+    return groups
+
+def compact_question_list(question_keys):
+    numbers = []
+    for question in question_keys:
+        match = re.match(r'^Q(\d+)$', str(question))
+        if not match:
+            return ', '.join(format_question_label(question) for question in question_keys)
+        numbers.append(int(match.group(1)))
+
+    if not numbers:
+        return ''
+
+    numbers = sorted(numbers)
+    ranges = []
+    start = numbers[0]
+    previous = numbers[0]
+    for number in numbers[1:]:
+        if number == previous + 1:
+            previous = number
+            continue
+        ranges.append((start, previous))
+        start = previous = number
+    ranges.append((start, previous))
+
+    range_text = ', '.join(str(start) if start == end else f"{start}-{end}" for start, end in ranges)
+    label = 'Question' if len(numbers) == 1 else 'Questions'
+    return f"{label} {range_text}"
+
+def format_missing_mapping_questions(missing_columns, assessment_files):
+    missing_columns = [str(column) for column in missing_columns or []]
+    if not missing_columns:
+        return ''
+
+    parts = []
+    handled = set()
+    for assessment in assessment_files or []:
+        label = assessment.get('label', 'Assessment')
+        prefix = f"{label} "
+        group_columns = [column for column in missing_columns if column.startswith(prefix)]
+        local_questions = [column[len(prefix):] for column in group_columns]
+        if local_questions:
+            handled.update(group_columns)
+            parts.append(f"{label}: {compact_question_list(local_questions)}")
+
+    remaining = [column for column in missing_columns if column not in handled]
+    if remaining:
+        parts.append(compact_question_list(remaining))
+
+    return '; '.join(parts)
+
+def format_mapped_questions_for_report(questions, assessment_files=None):
+    question_keys = [str(question) for question in questions or []]
+    if not question_keys:
+        return ''
+
+    assessment_files = assessment_files if assessment_files is not None else (session.get('assessment_files') or [])
+    parts = []
+    handled = set()
+
+    for assessment in assessment_files:
+        label = assessment.get('label', 'Assessment')
+        prefix = f"{label} "
+        group_questions = [question for question in question_keys if question.startswith(prefix)]
+        local_questions = [question[len(prefix):] for question in group_questions]
+        if local_questions:
+            parts.append(f"{label}: {compact_question_list(local_questions)}")
+            handled.update(group_questions)
+
+    remaining = [question for question in question_keys if question not in handled]
+    if remaining:
+        parts.append(compact_question_list(remaining))
+
+    return '; '.join(parts)
 
 def pdf_escape(value):
     return str(value).replace('\\', r'\\').replace('(', r'\(').replace(')', r'\)')
@@ -1108,7 +1495,7 @@ def build_results_pdf(stats, total_students, course_info):
     y = table_y
     current_parts = content_parts
     for clo, data in stats.items():
-        question_text = ", ".join(format_question_label(question) for question in data['questions'])
+        question_text = format_mapped_questions_for_report(data['questions'])
         clo_lines = wrap_pdf_text(clo, 48)
         question_lines = wrap_pdf_text(question_text, 26)
         line_count = max(len(clo_lines), len(question_lines), 2)
@@ -1187,6 +1574,25 @@ def build_results_pdf(stats, total_students, course_info):
 @app.route('/api/courses')
 def api_courses():
     return json.dumps(get_available_courses())
+
+@app.route('/start-over')
+def start_over():
+    session.clear()
+    return redirect(url_for('index'))
+
+@app.route('/back-to-upload')
+def back_to_upload():
+    upload_only_keys = [
+        'assessment_files',
+        'file_id',
+        'file_ext',
+        'mapping',
+        'report_metrics',
+    ]
+    for key in upload_only_keys:
+        session.pop(key, None)
+    session.modified = True
+    return redirect(url_for('index'))
 
 @app.route('/course-specification', methods=['GET', 'POST'])
 def course_specification():
@@ -1338,7 +1744,10 @@ def save_question_clos():
 def index():
     courses = get_available_courses()
     if request.method == 'POST':
-        course_name = request.form.get('course_name')
+        course_name = (request.form.get('course_name') or '').strip()
+        if not course_name:
+            flash("Please select a course before continuing.", "error")
+            return redirect(request.url)
         
         # Extract target percentages and edited CLO text
         target_percentages = {}
@@ -1365,20 +1774,33 @@ def index():
             target_percentages = {"_global": global_target}
         
         assessment_files = []
+        existing_assessment_files = session.get('assessment_files') or []
 
         allowed_assessment_types = {'Quiz', 'Assignment', 'Midterm', 'Final', 'Project'}
         pending_uploads = []
-        row_ids = request.form.getlist('assessment_row_ids')
+        uploaded_files = request.files.getlist('assessment_files')
+        uploaded_types = request.form.getlist('assessment_types')
 
-        for row_id in row_ids:
-            file = request.files.get(f'assessment_file_{row_id}')
+        for index, file in enumerate(uploaded_files):
             if not file or not file.filename:
                 continue
 
-            assessment_type = request.form.get(f'assessment_type_{row_id}', 'Quiz').strip()
+            assessment_type = uploaded_types[index].strip() if index < len(uploaded_types) else 'Quiz'
             if assessment_type not in allowed_assessment_types:
                 assessment_type = 'Quiz'
             pending_uploads.append({'file': file, 'type': assessment_type})
+
+        if not pending_uploads:
+            row_ids = request.form.getlist('assessment_row_ids')
+            for row_id in row_ids:
+                file = request.files.get(f'assessment_file_{row_id}')
+                if not file or not file.filename:
+                    continue
+
+                assessment_type = request.form.get(f'assessment_type_{row_id}', 'Quiz').strip()
+                if assessment_type not in allowed_assessment_types:
+                    assessment_type = 'Quiz'
+                pending_uploads.append({'file': file, 'type': assessment_type})
 
         type_totals = {}
         for upload in pending_uploads:
@@ -1395,8 +1817,8 @@ def index():
                 label = base_label
 
             file_ext = os.path.splitext(file.filename)[1].lower()
-            if file_ext not in {'.csv', '.xlsx', '.xls'}:
-                flash(f"Invalid {label} file format. Please upload CSV or Excel.")
+            if file_ext not in {'.csv', '.xlsx', '.xls', '.pdf'}:
+                flash(f"Invalid {label} file format. Please upload PDF, CSV, or Excel.")
                 return redirect(request.url)
 
             file_id = str(uuid.uuid4())
@@ -1424,8 +1846,13 @@ def index():
                 'metrics': metrics
             })
 
+        reused_existing_files = False
+        if not assessment_files and existing_assessment_files:
+            assessment_files = existing_assessment_files
+            reused_existing_files = True
+
         if not assessment_files:
-            flash("Please upload at least one Quiz, Assignment, Midterm, Final, or Project file.")
+            flash("Please upload at least one Quiz, Assignment, Midterm, Final, or Project file.", "error")
             return redirect(request.url)
 
         report_metrics = combine_assessment_metrics(assessment_files)
@@ -1436,12 +1863,20 @@ def index():
         session['target_percentages'] = target_percentages
         session['custom_clos'] = custom_clos
         session['report_metrics'] = report_metrics
-        session.pop('mapping', None)
+        if not reused_existing_files:
+            session.pop('mapping', None)
 
         return redirect(url_for('mapping'))
             
-    selected_course_name = session.pop('selected_course_name', '')
-    return render_template('report_index.html', courses=courses, selected_course_name=selected_course_name)
+    selected_course_name = session.pop('selected_course_name', None) or session.get('course_name', '')
+    return render_template(
+        'report_index.html',
+        courses=courses,
+        selected_course_name=selected_course_name,
+        saved_target_percentages=session.get('target_percentages', {}),
+        saved_custom_clos=session.get('custom_clos', []),
+        saved_assessment_files=session.get('assessment_files', [])
+    )
 
 @app.route('/mapping', methods=['GET', 'POST'])
 def mapping():
@@ -1472,6 +1907,7 @@ def mapping():
 
     detected_questions = report_metrics.get('questions') or []
     columns = detected_questions if detected_questions else numeric_cols
+    mapping_groups = build_mapping_groups(columns, assessment_files)
     total_students = report_metrics.get('total_students') or fallback_student_count
     total_questions = report_metrics.get('total_questions') or len(columns)
     max_scores = report_metrics.get('max_scores') or {}
@@ -1490,7 +1926,7 @@ def mapping():
             max_score_str = request.form.get(f"max_{col}")
             
             if not clos:
-                missing_questions.append(format_question_label(col))
+                missing_questions.append(str(col))
                 continue
 
             try:
@@ -1500,16 +1936,20 @@ def mapping():
             mapping_data[col] = {"clos": clos, "max_score": max_score}
 
         if missing_questions:
-            flash(f"Please select at least one CLO for: {', '.join(missing_questions)}")
+            missing_text = format_missing_mapping_questions(missing_questions, assessment_files)
+            flash(f"Please select at least one CLO for: {missing_text}", "error")
             session['mapping'] = mapping_data
+            session.modified = True
             return redirect(url_for('mapping'))
                     
         session['mapping'] = mapping_data
+        session.modified = True
         return redirect(url_for('results'))
 
     return render_template(
         'report_mapping.html',
         columns=columns,
+        mapping_groups=mapping_groups,
         clos=course_clos,
         course_name=course_name,
         total_students=total_students,
@@ -1532,6 +1972,7 @@ def results():
                            stats=stats,
                            total_students=total_students,
                            format_question_label=format_question_label,
+                           format_mapped_questions_for_report=format_mapped_questions_for_report,
                            student_count_warning=(session.get('report_metrics') or {}).get('student_count_warning', ''))
 
 @app.route('/export-results/csv')
@@ -1559,7 +2000,7 @@ def export_results_csv():
     for clo, data in stats.items():
         writer.writerow([
             clo,
-            ", ".join(format_question_label(question) for question in data['questions']),
+            format_mapped_questions_for_report(data['questions']),
             f"{data['total_possible_score']:.2f}",
             f"{data['target_score']:.2f}",
             f"{data['target_pct']:.2f}",

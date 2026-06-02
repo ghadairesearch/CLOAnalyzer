@@ -1,6 +1,80 @@
 {% extends "base.html" %}
 
 {% block content %}
+<style>
+    .assessment-upload-panel {
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background: #f9fafb;
+        padding: 1rem;
+    }
+
+    .assessment-upload-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .assessment-row {
+        display: grid;
+        grid-template-columns: 44px minmax(150px, 210px) minmax(240px, 1fr) auto;
+        gap: 0.75rem;
+        align-items: end;
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 0.75rem;
+    }
+
+    .assessment-column-header {
+        display: grid;
+        grid-template-columns: 44px minmax(150px, 210px) minmax(240px, 1fr) auto;
+        gap: 0.75rem;
+        padding: 0 0.75rem;
+        color: var(--text-muted);
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+
+    .assessment-row-number {
+        height: 2.75rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 4px;
+        background: rgba(26, 101, 107, 0.1);
+        color: var(--accent);
+        font-weight: 700;
+    }
+
+    @media (max-width: 760px) {
+        .assessment-upload-header .btn {
+            width: 100%;
+            text-align: center;
+        }
+
+        .assessment-row {
+            grid-template-columns: 44px minmax(0, 1fr);
+        }
+
+        .assessment-column-header {
+            display: none;
+        }
+
+        .assessment-file-cell,
+        .remove-assessment {
+            grid-column: 1 / -1;
+        }
+
+        .remove-assessment {
+            width: 100%;
+        }
+    }
+</style>
+
 <div class="card">
     <h2 style="margin-top: 0;">Upload Grades</h2>
     <p style="color: var(--text-muted); margin-bottom: 2rem;">Upload your grades or course report file to detect students and questions, then map questions to Course Learning Outcomes (CLOs).</p>
@@ -9,15 +83,18 @@
         <div class="form-group">
             <label class="form-label">Course</label>
             <div style="display: flex; align-items: stretch; gap: 0.75rem; flex-wrap: wrap;">
-                <select name="course_name" id="course_select" class="form-control" required style="flex: 1 1 320px; min-width: 0;">
+                <select name="course_name" id="course_select" class="form-control" style="flex: 1 1 320px; min-width: 0;">
                     <option value="">Select a course...</option>
+                    {% set course_names = courses|map(attribute='name')|list %}
+                    {% if selected_course_name and selected_course_name not in course_names %}
+                        <option value="{{ selected_course_name }}" selected>{{ selected_course_name }}</option>
+                    {% endif %}
                     {% for course in courses %}
                         <option value="{{ course.name }}" {% if selected_course_name == course.name %}selected{% endif %}>{{ course.name }}</option>
                     {% endfor %}
                 </select>
-                <a href="/course-specification" title="Upload course specification PDF" class="btn" style="display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem; white-space: nowrap; padding: 0.75rem 1rem; text-decoration: none;">
-                    <span style="display: inline-flex; align-items: center; justify-content: center; width: 1.25rem; height: 1.25rem; border-radius: 9999px; border: 1px solid currentColor; font-weight: 700;">?</span>
-                    <span>Course not found?</span>
+                <a href="/course-specification" title="Upload course specification PDF" style="align-self: center; color: var(--accent); font-weight: 600; white-space: nowrap; text-decoration: underline;">
+                    Course not found?
                 </a>
             </div>
         </div>
@@ -57,28 +134,51 @@
 
         <div class="form-group">
             <label class="form-label">Assessment Files</label>
-            <p style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0;">Upload at least one assessment file. Select the assessment type for each file.</p>
-            <div id="assessment_rows" style="display: grid; gap: 0.75rem;">
-                <div class="assessment-row" data-row-id="0" style="display: grid; grid-template-columns: minmax(160px, 220px) minmax(240px, 1fr) auto; gap: 0.75rem; align-items: end;">
-                    <input type="hidden" name="assessment_row_ids" value="0">
-                    <div>
-                        <label class="form-label" style="font-size: 0.9rem;">Type</label>
-                        <select name="assessment_type_0" class="form-control">
-                            <option value="Quiz">Quiz</option>
-                            <option value="Assignment">Assignment</option>
-                            <option value="Midterm">Midterm</option>
-                            <option value="Final">Final</option>
-                            <option value="Project">Project</option>
-                        </select>
+            <div class="assessment-upload-panel">
+                {% if saved_assessment_files %}
+                    <div style="border: 1px solid rgba(26, 101, 107, 0.25); border-radius: 6px; background: rgba(26, 101, 107, 0.06); padding: 0.75rem; margin-bottom: 0.75rem;">
+                        <div style="font-weight: 600; color: var(--accent); margin-bottom: 0.35rem;">Currently loaded files</div>
+                        <div style="display: grid; gap: 0.35rem;">
+                            {% for file in saved_assessment_files %}
+                                <div style="display: flex; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; color: var(--text-muted); font-size: 0.9rem;">
+                                    <span><strong style="color: var(--text-main);">{{ file.label }}</strong> - {{ file.original_name }}</span>
+                                    <span>{{ file.metrics.total_questions }} questions, {{ file.metrics.total_students }} students</span>
+                                </div>
+                            {% endfor %}
+                        </div>
                     </div>
-                    <div>
-                        <label class="form-label" style="font-size: 0.9rem;">File</label>
-                        <input type="file" name="assessment_file_0" class="form-control assessment-file" accept=".csv,.xlsx,.xls" style="padding: 0.5rem;">
+                {% endif %}
+                <div class="assessment-upload-header">
+                    <p style="font-size: 0.875rem; color: var(--text-muted); margin: 0;">Upload at least one grades file and select the assessment type for each file. PDF, CSV, and Excel files are supported.</p>
+                </div>
+                <div class="assessment-column-header">
+                    <span></span>
+                    <span>Type</span>
+                    <span>File</span>
+                    <span></span>
+                </div>
+                <div id="assessment_rows" style="display: grid; gap: 0.75rem;">
+                    <div class="assessment-row">
+                        <div class="assessment-row-number">1</div>
+                        <div>
+                            <select name="assessment_types" class="form-control" aria-label="Assessment type">
+                                <option value="Quiz">Quiz</option>
+                                <option value="Assignment">Assignment</option>
+                                <option value="Midterm">Midterm</option>
+                                <option value="Final">Final</option>
+                                <option value="Project">Project</option>
+                            </select>
+                        </div>
+                        <div class="assessment-file-cell">
+                            <input type="file" name="assessment_files" class="form-control assessment-file" accept=".pdf,.csv,.xlsx,.xls" style="padding: 0.5rem;" aria-label="Assessment file">
+                        </div>
+                        <button type="button" class="btn remove-assessment" style="background-color: var(--border-color); color: var(--text-main); padding: 0.75rem 1rem;">Remove</button>
                     </div>
-                    <button type="button" class="btn remove-assessment" style="background-color: var(--border-color); color: var(--text-main); padding: 0.75rem 1rem;">Remove</button>
+                </div>
+                <div style="display: flex; justify-content: flex-start; margin-top: 0.75rem;">
+                    <button type="button" id="add_assessment_file" class="btn" style="background-color: var(--accent-secondary); padding: 0.65rem 1rem;">Add another file</button>
                 </div>
             </div>
-            <button type="button" id="add_assessment_file" class="btn" style="margin-top: 0.75rem; background-color: var(--accent-secondary);">Add another file</button>
         </div>
 
         <button type="submit" class="btn">Next: Map CLOs</button>
@@ -94,6 +194,10 @@
         const tbKnowledge = document.getElementById('tbody_knowledge');
         const tbSkills = document.getElementById('tbody_skills');
         const tbValues = document.getElementById('tbody_values');
+        const savedTargetPercentages = {{ saved_target_percentages|tojson }};
+        const savedCustomClos = {{ saved_custom_clos|tojson }};
+        const savedCourseName = {{ selected_course_name|tojson }};
+        const hasSavedAssessmentFiles = {{ 'true' if saved_assessment_files else 'false' }};
         let assessmentRowCounter = 1;
         
         let coursesData = [];
@@ -110,7 +214,11 @@
 
         function updateRemoveButtons() {
             const rows = assessmentRows.querySelectorAll('.assessment-row');
-            rows.forEach(row => {
+            rows.forEach((row, index) => {
+                const number = row.querySelector('.assessment-row-number');
+                if (number) {
+                    number.textContent = index + 1;
+                }
                 const button = row.querySelector('.remove-assessment');
                 button.disabled = rows.length === 1;
                 button.style.opacity = rows.length === 1 ? '0.55' : '1';
@@ -120,16 +228,10 @@
         function createAssessmentRow(rowId) {
             const row = document.createElement('div');
             row.className = 'assessment-row';
-            row.dataset.rowId = rowId;
-            row.style.display = 'grid';
-            row.style.gridTemplateColumns = 'minmax(160px, 220px) minmax(240px, 1fr) auto';
-            row.style.gap = '0.75rem';
-            row.style.alignItems = 'end';
             row.innerHTML = `
-                <input type="hidden" name="assessment_row_ids" value="${rowId}">
+                <div class="assessment-row-number">${rowId + 1}</div>
                 <div>
-                    <label class="form-label" style="font-size: 0.9rem;">Type</label>
-                    <select name="assessment_type_${rowId}" class="form-control">
+                    <select name="assessment_types" class="form-control" aria-label="Assessment type">
                         <option value="Quiz">Quiz</option>
                         <option value="Assignment">Assignment</option>
                         <option value="Midterm">Midterm</option>
@@ -137,13 +239,29 @@
                         <option value="Project">Project</option>
                     </select>
                 </div>
-                <div>
-                    <label class="form-label" style="font-size: 0.9rem;">File</label>
-                    <input type="file" name="assessment_file_${rowId}" class="form-control assessment-file" accept=".csv,.xlsx,.xls" style="padding: 0.5rem;">
+                <div class="assessment-file-cell">
+                    <input type="file" name="assessment_files" class="form-control assessment-file" accept=".pdf,.csv,.xlsx,.xls" style="padding: 0.5rem;" aria-label="Assessment file">
                 </div>
                 <button type="button" class="btn remove-assessment" style="background-color: var(--border-color); color: var(--text-main); padding: 0.75rem 1rem;">Remove</button>
             `;
             return row;
+        }
+
+        function showTopError(message) {
+            const container = document.querySelector('.container');
+            const existing = document.getElementById('upload_error_alert');
+            if (existing) {
+                existing.textContent = message;
+                existing.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                return;
+            }
+
+            const alertBox = document.createElement('div');
+            alertBox.id = 'upload_error_alert';
+            alertBox.className = 'alert alert-error';
+            alertBox.textContent = message;
+            container.insertBefore(alertBox, container.firstElementChild);
+            alertBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
 
         addAssessmentFile.addEventListener('click', function() {
@@ -167,11 +285,18 @@
         updateRemoveButtons();
 
         form.addEventListener('submit', function(event) {
+            if (!courseSelect.value) {
+                event.preventDefault();
+                showTopError('Please select a course before continuing.');
+                courseSelect.focus();
+                return;
+            }
+
             const assessmentFiles = document.querySelectorAll('.assessment-file');
             const hasFile = Array.from(assessmentFiles).some(input => input.files.length > 0);
-            if (!hasFile) {
+            if (!hasFile && !hasSavedAssessmentFiles) {
                 event.preventDefault();
-                alert('Please upload at least one Quiz, Assignment, Midterm, Final, or Project file.');
+                showTopError('Please upload at least one Quiz, Assignment, Midterm, Final, or Project file.');
             }
         });
 
@@ -186,15 +311,22 @@
             const emptyMsg = `<tr><td colspan="2" style="color: var(--text-muted); font-style: italic; text-align: center; font-size: 0.875rem;">No CLOs detected for this category.</td></tr>`;
             const selectMsg = `<tr><td colspan="2" style="color: var(--text-muted); font-style: italic; text-align: center; font-size: 0.875rem;">Select a course to populate...</td></tr>`;
             
-            if (course && course.clos && course.clos.length > 0) {
-                course.clos.forEach((clo, idx) => {
+            const closToRender = savedCustomClos.length > 0 && selectedCourseName === savedCourseName
+                ? savedCustomClos
+                : (course && course.clos ? course.clos : []);
+
+            if (closToRender.length > 0) {
+                closToRender.forEach((clo, idx) => {
+                    const savedTarget = Object.prototype.hasOwnProperty.call(savedTargetPercentages, clo)
+                        ? savedTargetPercentages[clo]
+                        : 60;
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td style="padding: 0.5rem;">
                             <textarea name="clo_text_${idx}" class="form-control" rows="2" style="width: 100%; resize: vertical;" required>${clo}</textarea>
                         </td>
                         <td style="padding: 0.5rem; vertical-align: top;">
-                            <input type="number" name="target_${idx}" class="form-control" value="60" min="1" max="100" required>
+                            <input type="number" name="target_${idx}" class="form-control" value="${savedTarget}" min="1" max="100" required>
                         </td>
                     `;
                     
