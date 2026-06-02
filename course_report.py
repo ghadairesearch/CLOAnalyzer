@@ -55,7 +55,7 @@ def group_clos_by_domain(clos):
             grouped['other'].append(clo_text)
     return grouped
 
-def decode_pdf_string(value):
+def decode_pdf_string(value, cmap=None):
     value = value.replace(r'\\', '\u0000')
     value = value.replace(r'\(', '(').replace(r'\)', ')')
     value = value.replace(r'\n', ' ').replace(r'\r', ' ').replace(r'\t', ' ')
@@ -67,19 +67,24 @@ def decode_pdf_string(value):
             return ''
 
     value = re.sub(r'\\([0-7]{1,3})', replace_octal, value)
-    return value.replace('\u0000', '\\')
+    value = value.replace('\u0000', '\\')
+    if cmap:
+        return ''.join(cmap.get(ord(char), char) for char in value)
+    return value
 
-def decode_pdf_hex_string(value):
+def decode_pdf_hex_string(value, cmap=None):
     try:
         raw = bytes.fromhex(value)
     except ValueError:
         return ''
 
+    if cmap:
+        return ''.join(cmap.get(byte, chr(byte)) for byte in raw)
     if raw.startswith(b'\xfe\xff'):
         return raw[2:].decode('utf-16-be', errors='ignore')
     return raw.decode('latin-1', errors='ignore')
 
-def decode_pdf_text_array(array_content):
+def decode_pdf_text_array(array_content, cmap=None):
     tokens = re.finditer(
         r'\((?:\\.|[^\\()])*\)|<([0-9A-Fa-f\s]+)>|[-+]?\d*\.?\d+',
         array_content,
@@ -89,9 +94,9 @@ def decode_pdf_text_array(array_content):
     for token_match in tokens:
         token = token_match.group(0)
         if token.startswith('('):
-            text += decode_pdf_string(token[1:-1])
+            text += decode_pdf_string(token[1:-1], cmap)
         elif token.startswith('<'):
-            text += decode_pdf_hex_string(token[1:-1])
+            text += decode_pdf_hex_string(token[1:-1], cmap)
         else:
             try:
                 spacing_adjustment = abs(float(token))
@@ -101,7 +106,7 @@ def decode_pdf_text_array(array_content):
                 text += ' '
     return text
 
-def extract_pdf_block_text(block):
+def extract_pdf_block_text(block, cmap=None):
     text = ''
     for text_match in re.finditer(
         r'\[(.*?)\]\s*TJ|\((.*?)\)\s*Tj|<([0-9A-Fa-f\s]+)>\s*Tj',
@@ -109,11 +114,11 @@ def extract_pdf_block_text(block):
         flags=re.S
     ):
         if text_match.group(1) is not None:
-            text += decode_pdf_text_array(text_match.group(1))
+            text += decode_pdf_text_array(text_match.group(1), cmap)
         elif text_match.group(2) is not None:
-            text += decode_pdf_string(text_match.group(2))
+            text += decode_pdf_string(text_match.group(2), cmap)
         elif text_match.group(3) is not None:
-            text += decode_pdf_hex_string(text_match.group(3))
+            text += decode_pdf_hex_string(text_match.group(3), cmap)
     return text
 
 def estimate_pdf_text_width(text, font_size):
@@ -155,8 +160,82 @@ def join_pdf_text_segments(segments):
         previous = segment
     return '\n'.join(part for part in output if part)
 
+def decode_cmap_hex(value):
+    try:
+        raw = bytes.fromhex(value)
+    except ValueError:
+        return ''
+    if len(raw) % 2 == 0:
+        return raw.decode('utf-16-be', errors='ignore')
+    return raw.decode('latin-1', errors='ignore')
+
+def parse_tounicode_cmap(cmap_text):
+    cmap = {}
+    for src, dst in re.findall(r'<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>', cmap_text):
+        if len(src) <= 2:
+            cmap[int(src, 16)] = decode_cmap_hex(dst)
+
+    for src_start, src_end, dst_start in re.findall(
+        r'<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>',
+        cmap_text
+    ):
+        if len(src_start) > 2 or len(src_end) > 2:
+            continue
+        start = int(src_start, 16)
+        end = int(src_end, 16)
+        dst = int(dst_start, 16)
+        for offset, code in enumerate(range(start, end + 1)):
+            cmap[code] = chr(dst + offset)
+
+    return cmap
+
+def decode_pdf_stream_object(object_body):
+    stream_match = re.search(rb'stream\r?\n(.*?)\r?\nendstream', object_body, flags=re.S)
+    if not stream_match:
+        return b''
+    stream = stream_match.group(1)
+    dictionary = object_body[:stream_match.start()]
+    if b'FlateDecode' in dictionary:
+        try:
+            return zlib.decompress(stream)
+        except zlib.error:
+            return b''
+    return stream
+
+def build_pdf_font_cmaps(pdf_bytes):
+    objects = {
+        int(match.group(1)): match.group(2)
+        for match in re.finditer(rb'(\d+)\s+0\s+obj(.*?)endobj', pdf_bytes, flags=re.S)
+    }
+    tounicode_maps = {}
+    for object_id, body in objects.items():
+        stream = decode_pdf_stream_object(body)
+        if b'begincmap' in stream:
+            cmap_text = stream.decode('latin-1', errors='ignore')
+            tounicode_maps[object_id] = parse_tounicode_cmap(cmap_text)
+
+    font_object_cmaps = {}
+    for object_id, body in objects.items():
+        match = re.search(rb'/ToUnicode\s+(\d+)\s+0\s+R', body)
+        if match:
+            cmap = tounicode_maps.get(int(match.group(1)))
+            if cmap:
+                font_object_cmaps[object_id] = cmap
+
+    font_resource_cmaps = {}
+    for body in objects.values():
+        font_block_match = re.search(rb'/Font\s*<<(.*?)>>', body, flags=re.S)
+        if not font_block_match:
+            continue
+        for name, object_ref in re.findall(rb'/([A-Za-z0-9]+)\s+(\d+)\s+0\s+R', font_block_match.group(1)):
+            cmap = font_object_cmaps.get(int(object_ref))
+            if cmap:
+                font_resource_cmaps[name.decode('ascii', errors='ignore')] = cmap
+    return font_resource_cmaps
+
 def extract_text_from_pdf_streams(pdf_bytes):
     extracted = []
+    font_cmaps = build_pdf_font_cmaps(pdf_bytes)
     for match in re.finditer(rb'stream\r?\n(.*?)\r?\nendstream', pdf_bytes, flags=re.S):
         stream = match.group(1)
         dictionary = pdf_bytes[max(0, match.start() - 700):match.start()]
@@ -170,7 +249,10 @@ def extract_text_from_pdf_streams(pdf_bytes):
         segments = []
         for block_match in re.finditer(r'BT(.*?)ET', content, flags=re.S):
             block = block_match.group(1)
-            block_text = extract_pdf_block_text(block)
+            font_name_match = re.findall(r'/([A-Za-z0-9]+)\s+[0-9.]+\s+Tf', block)
+            font_name = font_name_match[-1] if font_name_match else ''
+            cmap = font_cmaps.get(font_name)
+            block_text = extract_pdf_block_text(block, cmap)
             if not block_text.strip():
                 continue
 
