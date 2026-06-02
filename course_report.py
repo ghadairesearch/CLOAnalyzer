@@ -788,6 +788,10 @@ def pdf_rect(parts, x, y, width, height, fill=False):
     operator = "f" if fill else "S"
     parts.append(f"{x} {y} {width} {height} re {operator}")
 
+def draw_pdf_lines(parts, lines, x, top_y, size=7, line_height=9, font="F1"):
+    for index, line in enumerate(lines):
+        pdf_text(parts, x, top_y - (index * line_height), line, size, font)
+
 def build_results_pdf(stats, total_students, course_info):
     logo_path = os.path.join(app.static_folder, 'logo.jpg')
     logo_bytes = b''
@@ -828,61 +832,95 @@ def build_results_pdf(stats, total_students, course_info):
     pdf_text(content_parts, 245, 650, "Mapped CLOs", 10, "F1")
     pdf_text(content_parts, 245, 632, str(len(stats)), 16, "F2")
 
-    table_x = 40
+    page_contents = [content_parts]
+    table_x = 30
     table_y = 590
-    row_height = 32
-    col_widths = [160, 95, 70, 75, 75, 75]
+    col_widths = [220, 125, 50, 55, 45, 65]
     headers = ["CLO", "Questions", "Max", "Target", "Achieved", "Achievement"]
-    content_parts.append("0.102 0.396 0.420 rg")
-    pdf_rect(content_parts, table_x, table_y, sum(col_widths), 24, True)
-    content_parts.append("1 1 1 rg")
-    x = table_x + 5
-    for header, width in zip(headers, col_widths):
-        pdf_text(content_parts, x, table_y + 8, header, 8, "F2")
-        x += width
 
-    y = table_y - row_height
-    content_parts.append("0 0 0 rg")
-    content_parts.append("0.835 0.855 0.890 RG")
+    def draw_table_header(parts, y_position):
+        parts.append("0.102 0.396 0.420 rg")
+        pdf_rect(parts, table_x, y_position, sum(col_widths), 24, True)
+        parts.append("1 1 1 rg")
+        header_x = table_x + 5
+        for header, width in zip(headers, col_widths):
+            pdf_text(parts, header_x, y_position + 8, header, 8, "F2")
+            header_x += width
+        parts.append("0 0 0 rg")
+        parts.append("0.835 0.855 0.890 RG")
+
+    def new_continuation_page():
+        parts = []
+        parts.append("0.102 0.396 0.420 RG")
+        parts.append("0.102 0.396 0.420 rg")
+        pdf_text(parts, 40, 755, "CLO Attainment Report", 14, "F2")
+        parts.append("0.608 0.494 0.333 RG")
+        pdf_line(parts, 40, 740, 560, 740)
+        parts.append("0 0 0 RG")
+        parts.append("0 0 0 rg")
+        pdf_text(parts, 40, 720, f"Course Name: {course_info.get('course_name', '')}", 9, "F1")
+        pdf_text(parts, 330, 720, f"Report Date: {report_date}", 9, "F1")
+        draw_table_header(parts, 680)
+        page_contents.append(parts)
+        return parts, 680
+
+    draw_table_header(content_parts, table_y)
+    y = table_y
+    current_parts = content_parts
     for clo, data in stats.items():
-        if y < 70:
-            break
-        pdf_rect(content_parts, table_x, y, sum(col_widths), row_height, False)
+        question_text = ", ".join(format_question_label(question) for question in data['questions'])
+        clo_lines = wrap_pdf_text(clo, 48)
+        question_lines = wrap_pdf_text(question_text, 26)
+        line_count = max(len(clo_lines), len(question_lines), 2)
+        row_height = max(36, 16 + (line_count * 9))
+
+        if y - row_height < 55:
+            current_parts, y = new_continuation_page()
+
+        row_y = y - row_height
+        pdf_rect(current_parts, table_x, row_y, sum(col_widths), row_height, False)
         x = table_x
         for width in col_widths[:-1]:
             x += width
-            pdf_line(content_parts, x, y, x, y + row_height)
+            pdf_line(current_parts, x, row_y, x, row_y + row_height)
 
-        clo_lines = wrap_pdf_text(clo, 24)[:2]
-        question_text = ", ".join(format_question_label(question) for question in data['questions'])
-        question_lines = wrap_pdf_text(question_text, 15)[:2]
-        pdf_text(content_parts, table_x + 5, y + 20, clo_lines[0], 7, "F1")
-        if len(clo_lines) > 1:
-            pdf_text(content_parts, table_x + 5, y + 10, clo_lines[1], 7, "F1")
-        pdf_text(content_parts, table_x + 165, y + 20, question_lines[0], 7, "F1")
-        if len(question_lines) > 1:
-            pdf_text(content_parts, table_x + 165, y + 10, question_lines[1], 7, "F1")
-        pdf_text(content_parts, table_x + 260, y + 15, f"{data['total_possible_score']:.2f}", 8, "F1")
-        pdf_text(content_parts, table_x + 330, y + 15, f"{data['target_score']:.2f}", 8, "F1")
-        pdf_text(content_parts, table_x + 405, y + 15, str(data['students_achieved']), 8, "F1")
-        pdf_text(content_parts, table_x + 480, y + 15, f"{data['achievement_percentage']:.2f}%", 8, "F1")
-        y -= row_height
+        text_top = row_y + row_height - 12
+        draw_pdf_lines(current_parts, clo_lines, table_x + 5, text_top, 6.7, 9, "F1")
+        draw_pdf_lines(current_parts, question_lines, table_x + 225, text_top, 6.7, 9, "F1")
+        number_y = row_y + row_height - 21
+        pdf_text(current_parts, table_x + 350, number_y, f"{data['total_possible_score']:.2f}", 7.5, "F1")
+        pdf_text(current_parts, table_x + 400, number_y, f"{data['target_score']:.2f}", 7.5, "F1")
+        pdf_text(current_parts, table_x + 455, number_y, str(data['students_achieved']), 7.5, "F1")
+        pdf_text(current_parts, table_x + 500, number_y, f"{data['achievement_percentage']:.2f}%", 7.5, "F1")
+        y = row_y
 
-    content_parts.append("0.5 0.5 0.5 rg")
-    pdf_text(content_parts, 50, 35, "Generated by CLO Attainment Report Generator", 8, "F1")
+    for parts in page_contents:
+        parts.append("0.5 0.5 0.5 rg")
+        pdf_text(parts, 50, 35, "Generated by CLO Attainment Report Generator", 8, "F1")
 
-    stream = "\n".join(content_parts).encode('latin-1')
-
-    image_resource = " /XObject << /Im1 7 0 R >>" if logo_bytes else ""
+    page_count = len(page_contents)
+    font_regular_id = 3 + page_count
+    font_bold_id = font_regular_id + 1
+    content_start_id = font_bold_id + 1
+    image_id = content_start_id + page_count if logo_bytes else None
+    image_resource = f" /XObject << /Im1 {image_id} 0 R >>" if logo_bytes else ""
+    page_kids = " ".join(f"{3 + index} 0 R" for index in range(page_count))
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >>{image_resource} >> /Contents 5 0 R >>".encode('ascii'),
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        b"<< /Length " + str(len(stream)).encode('ascii') + b" >>\nstream\n" + stream + b"\nendstream"
+        f"<< /Type /Pages /Kids [{page_kids}] /Count {page_count} >>".encode('ascii')
     ]
-    objects.insert(4, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>")
-    objects[2] = f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R /F2 5 0 R >>{image_resource} >> /Contents 6 0 R >>".encode('ascii')
+    for page_index in range(page_count):
+        content_id = content_start_id + page_index
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 {font_regular_id} 0 R /F2 {font_bold_id} 0 R >>{image_resource} >> /Contents {content_id} 0 R >>".encode('ascii')
+        )
+    objects.extend([
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"
+    ])
+    for parts in page_contents:
+        stream = "\n".join(parts).encode('latin-1')
+        objects.append(b"<< /Length " + str(len(stream)).encode('ascii') + b" >>\nstream\n" + stream + b"\nendstream")
     if logo_bytes:
         objects.append(
             f"<< /Type /XObject /Subtype /Image /Width {logo_width} /Height {logo_height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {len(logo_bytes)} >>\nstream\n".encode('ascii')
