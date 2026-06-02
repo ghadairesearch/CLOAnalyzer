@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
+        <h2 style="margin-top: 0;">Upload Course Specification</h2>
+        <a href="/" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Back</a>
+    </div>
+    <p style="color: var(--text-muted); margin-bottom: 2rem;">Upload a course specification PDF to extract the course name, course number, and CLOs.</p>
+
+    <form method="POST" enctype="multipart/form-data">
+        <div class="form-group">
+            <label class="form-label">Course Specification PDF</label>
+            <input type="file" name="course_spec_file" class="form-control" accept=".pdf" required style="padding: 0.5rem;">
+        </div>
+        <button type="submit" class="btn">Extract Course</button>
+    </form>
+
+    {% if extracted %}
+        <div style="margin-top: 2rem;">
+            <h3>Extracted Preview</h3>
+            <table>
+                <tbody>
+                    <tr>
+                        <th>Course Name</th>
+                        <td>{{ extracted.course_name or "-" }}</td>
+                    </tr>
+                    <tr>
+                        <th>Course Number</th>
+                        <td>{{ extracted.course_code or "-" }}</td>
+                    </tr>
+                    <tr>
+                        <th>CLOs</th>
+                        <td>
+                            {% if extracted.clos %}
+                                <ul style="margin: 0; padding-left: 1.25rem;">
+                                    {% for clo in extracted.clos %}
+                                        <li>{{ clo }}</li>
+                                    {% endfor %}
+                                </ul>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

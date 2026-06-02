@@ -22,8 +22,18 @@ def load_courses():
             return json.load(f).get('courses', [])
     return []
 
-def get_course_clos(course_name):
+def get_available_courses():
     courses = load_courses()
+    custom_courses = session.get('custom_courses', [])
+    existing_names = {course.get('name') for course in courses}
+    for course in custom_courses:
+        if course.get('name') and course.get('name') not in existing_names:
+            courses.append(course)
+            existing_names.add(course.get('name'))
+    return courses
+
+def get_course_clos(course_name):
+    courses = get_available_courses()
     return next((c.get('clos', []) for c in courses if c.get('name') == course_name), [])
 
 def decode_pdf_string(value):
@@ -149,6 +159,73 @@ def infer_course_report_metrics(text):
         'total_students': total_students or 0,
         'confidence': confidence,
         'text_sample': normalized[:1200]
+    }
+
+def value_after_label(lines, labels):
+    for index, line in enumerate(lines):
+        for label in labels:
+            pattern = rf'(?i)\b{re.escape(label)}\b\s*[:\-]?\s*(.+)$'
+            match = re.search(pattern, line)
+            if match and match.group(1).strip():
+                value = match.group(1).strip()
+                if len(value) > 1:
+                    return value
+            if re.search(rf'(?i)\b{re.escape(label)}\b\s*$', line) and index + 1 < len(lines):
+                next_value = lines[index + 1].strip()
+                if next_value:
+                    return next_value
+    return ''
+
+def clean_clo_text(value):
+    value = re.sub(r'\s+', ' ', value or '').strip()
+    value = re.sub(r'\s+(Teaching|Assessment|Methods?|Code|Domain)\b.*$', '', value, flags=re.I).strip()
+    return value
+
+def extract_course_spec_metadata(text):
+    lines = [compact_text(line) for line in (text or '').splitlines()]
+    lines = [line for line in lines if line]
+    normalized = compact_text(text)
+
+    course_name = value_after_label(lines, ['Course Name', 'Course Title', 'Course'])
+    course_code = value_after_label(lines, ['Course Code', 'Course Number', 'Course ID', 'Course No'])
+
+    if not course_code:
+        code_match = re.search(r'\b([A-Z]{2,5}\s*\d{3,4}[A-Z]?)\b', normalized)
+        if code_match:
+            course_code = re.sub(r'\s+', '', code_match.group(1))
+
+    if not course_name:
+        title_match = re.search(r'(?i)(?:Course\s+(?:Name|Title)\s*[:\-]?\s*)(.{4,120}?)(?=\s+(?:Course\s+(?:Code|Number|ID)|Credit|Prerequisite|$))', normalized)
+        if title_match:
+            course_name = title_match.group(1).strip()
+
+    clo_map = {}
+    line_text = '\n'.join(lines)
+    for match in re.finditer(r'(?m)^\s*((?:[123]\.\d+|CLO\s*\d+))\s+(.+)$', line_text, flags=re.I):
+        clo_id = re.sub(r'\s+', '', match.group(1).upper())
+        clo_body = clean_clo_text(match.group(2))
+        if clo_body and len(clo_body) > 8:
+            clo_map[clo_id] = f"{clo_id} {clo_body}"
+
+    if not clo_map:
+        for match in re.finditer(r'\b([123]\.\d+)\s+(.{12,220}?)(?=\s+[123]\.\d+\s+|\s+CLO\s*\d+\s+|$)', normalized, flags=re.I):
+            clo_id = match.group(1)
+            clo_body = clean_clo_text(match.group(2))
+            if clo_body:
+                clo_map[clo_id] = f"{clo_id} {clo_body}"
+
+    clos = list(clo_map.values())
+    display_name = course_name
+    if course_code and course_name and course_code not in course_name:
+        display_name = f"{course_name} ({course_code})"
+    elif course_code and not course_name:
+        display_name = course_code
+
+    return {
+        'name': display_name,
+        'course_name': course_name,
+        'course_code': course_code,
+        'clos': clos
     }
 
 def question_number_from_label(label):
@@ -690,7 +767,50 @@ def build_results_pdf(stats, total_students, course_info):
 
 @app.route('/api/courses')
 def api_courses():
-    return json.dumps(load_courses())
+    return json.dumps(get_available_courses())
+
+@app.route('/course-specification', methods=['GET', 'POST'])
+def course_specification():
+    extracted = None
+    if request.method == 'POST':
+        if 'course_spec_file' not in request.files:
+            flash("Please upload a course specification PDF.")
+            return redirect(request.url)
+
+        file = request.files['course_spec_file']
+        if not file or file.filename == '':
+            flash("Please upload a course specification PDF.")
+            return redirect(request.url)
+
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        if file_ext != '.pdf':
+            flash("Course specification must be uploaded as a PDF.")
+            return redirect(request.url)
+
+        file_id = str(uuid.uuid4())
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], f"{file_id}{file_ext}")
+        file.save(filepath)
+
+        try:
+            text = extract_pdf_text(filepath)
+            extracted = extract_course_spec_metadata(text)
+        except Exception as e:
+            flash(f"Could not read course specification PDF: {e}")
+            return redirect(request.url)
+
+        if not extracted.get('name') or not extracted.get('clos'):
+            flash("Could not fully extract the course name/code and CLOs. Please check the PDF text and try again.")
+            return render_template('course_specification.html', extracted=extracted)
+
+        custom_courses = session.get('custom_courses', [])
+        custom_courses = [course for course in custom_courses if course.get('name') != extracted['name']]
+        custom_courses.append({'name': extracted['name'], 'clos': extracted['clos']})
+        session['custom_courses'] = custom_courses
+        session['selected_course_name'] = extracted['name']
+        flash(f"Added course from specification: {extracted['name']}")
+        return redirect(url_for('index'))
+
+    return render_template('course_specification.html', extracted=extracted)
 
 @app.route('/analyze-report', methods=['POST'])
 def analyze_report():
@@ -777,7 +897,7 @@ def save_question_clos():
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    courses = load_courses()
+    courses = get_available_courses()
     if request.method == 'POST':
         course_name = request.form.get('course_name')
         
@@ -868,7 +988,8 @@ def index():
 
         return redirect(url_for('mapping'))
             
-    return render_template('report_index.html', courses=courses)
+    selected_course_name = session.pop('selected_course_name', '')
+    return render_template('report_index.html', courses=courses, selected_course_name=selected_course_name)
 
 @app.route('/mapping', methods=['GET', 'POST'])
 def mapping():

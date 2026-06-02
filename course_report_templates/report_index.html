@@ -7,11 +7,17 @@
 
     <form method="POST" enctype="multipart/form-data">
         <div class="form-group">
-            <label class="form-label">Course</label>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
+                <label class="form-label" style="margin-bottom: 0.5rem;">Course</label>
+                <a href="/course-specification" title="Course not listed" style="display: inline-flex; align-items: center; gap: 0.35rem; color: var(--accent); font-weight: 600; text-decoration: none;">
+                    <span style="display: inline-flex; align-items: center; justify-content: center; width: 1.4rem; height: 1.4rem; border-radius: 9999px; border: 1px solid var(--accent);">?</span>
+                    <span>Can't find course?</span>
+                </a>
+            </div>
             <select name="course_name" id="course_select" class="form-control" required>
                 <option value="">Select a course...</option>
                 {% for course in courses %}
-                    <option value="{{ course.name }}">{{ course.name }}</option>
+                    <option value="{{ course.name }}" {% if selected_course_name == course.name %}selected{% endif %}>{{ course.name }}</option>
                 {% endfor %}
             </select>
         </div>
@@ -146,6 +152,10 @@
                 tbValues.innerHTML = emptyMsg;
             }
         });
+
+        if (courseSelect.value) {
+            courseSelect.dispatchEvent(new Event('change'));
+        }
     });
 </script>
 {% endblock %}
