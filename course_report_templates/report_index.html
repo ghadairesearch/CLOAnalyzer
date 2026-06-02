@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <h2 style="margin-top: 0;">Upload Grades</h2>
+    <p style="color: var(--text-muted); margin-bottom: 2rem;">Upload your grades or course report file to detect students and questions, then map questions to Course Learning Outcomes (CLOs).</p>
+
+    <form method="POST" enctype="multipart/form-data">
+        <div class="form-group">
+            <label class="form-label">Course</label>
+            <select name="course_name" id="course_select" class="form-control" required>
+                <option value="">Select a course...</option>
+                {% for course in courses %}
+                    <option value="{{ course.name }}">{{ course.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div id="clo_targets_container" style="margin-bottom: 1.5rem;">
+            <label class="form-label">Target Level (%) per CLO</label>
+            <p style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.5rem;">Set the percentage of max score a student needs to achieve for each CLO.</p>
+            <table id="clo_table" style="background: #f9fafb; border: 1px solid var(--border-color);">
+                <thead>
+                    <tr>
+                        <th>Course Learning Outcome (CLO)</th>
+                        <th style="width: 150px;">Target Level (%)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td colspan="2" style="background: rgba(0,0,0,0.05); font-weight: bold; padding: 0.5rem 1rem;">1.0 Knowledge</td></tr>
+                </tbody>
+                <tbody id="tbody_knowledge">
+                    <tr><td colspan="2" style="color: var(--text-muted); font-style: italic; text-align: center; font-size: 0.875rem;">Select a course to populate...</td></tr>
+                </tbody>
+                
+                <tbody>
+                    <tr><td colspan="2" style="background: rgba(0,0,0,0.05); font-weight: bold; padding: 0.5rem 1rem;">2.0 Skills</td></tr>
+                </tbody>
+                <tbody id="tbody_skills">
+                    <tr><td colspan="2" style="color: var(--text-muted); font-style: italic; text-align: center; font-size: 0.875rem;">Select a course to populate...</td></tr>
+                </tbody>
+                
+                <tbody>
+                    <tr><td colspan="2" style="background: rgba(0,0,0,0.05); font-weight: bold; padding: 0.5rem 1rem;">3.0 Values</td></tr>
+                </tbody>
+                <tbody id="tbody_values">
+                    <tr><td colspan="2" style="color: var(--text-muted); font-style: italic; text-align: center; font-size: 0.875rem;">Select a course to populate...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Assessment Files</label>
+            <p style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0;">Upload at least one assessment file. CSV and Excel files are supported.</p>
+            <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem;">
+                <div>
+                    <label class="form-label" style="font-size: 0.9rem;">Quizzes</label>
+                    <input type="file" name="quiz_files" class="form-control assessment-file" accept=".csv,.xlsx,.xls" multiple style="padding: 0.5rem;">
+                    <small style="color: var(--text-muted); display: block; margin-top: 0.35rem;">Files are labeled Quiz 1, Quiz 2, Quiz 3.</small>
+                </div>
+                <div>
+                    <label class="form-label" style="font-size: 0.9rem;">Assignments</label>
+                    <input type="file" name="assignment_files" class="form-control assessment-file" accept=".csv,.xlsx,.xls" multiple style="padding: 0.5rem;">
+                    <small style="color: var(--text-muted); display: block; margin-top: 0.35rem;">Files are labeled Assignment 1, Assignment 2.</small>
+                </div>
+                <div>
+                    <label class="form-label" style="font-size: 0.9rem;">Midterm</label>
+                    <input type="file" name="midterm_file" class="form-control assessment-file" accept=".csv,.xlsx,.xls" style="padding: 0.5rem;">
+                </div>
+                <div>
+                    <label class="form-label" style="font-size: 0.9rem;">Final</label>
+                    <input type="file" name="final_file" class="form-control assessment-file" accept=".csv,.xlsx,.xls" style="padding: 0.5rem;">
+                </div>
+                <div>
+                    <label class="form-label" style="font-size: 0.9rem;">Project</label>
+                    <input type="file" name="project_file" class="form-control assessment-file" accept=".csv,.xlsx,.xls" style="padding: 0.5rem;">
+                </div>
+            </div>
+        </div>
+
+        <button type="submit" class="btn">Next: Map CLOs</button>
+    </form>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const form = document.querySelector('form');
+        const assessmentFiles = document.querySelectorAll('.assessment-file');
+        const courseSelect = document.getElementById('course_select');
+        const tbKnowledge = document.getElementById('tbody_knowledge');
+        const tbSkills = document.getElementById('tbody_skills');
+        const tbValues = document.getElementById('tbody_values');
+        
+        let coursesData = [];
+        
+        // Fetch courses config
+        fetch('/api/courses')
+            .then(res => res.json())
+            .then(data => {
+                coursesData = data;
+            });
+
+        form.addEventListener('submit', function(event) {
+            const hasFile = Array.from(assessmentFiles).some(input => input.files.length > 0);
+            if (!hasFile) {
+                event.preventDefault();
+                alert('Please upload at least one Quiz, Assignment, Midterm, Final, or Project file.');
+            }
+        });
+
+        courseSelect.addEventListener('change', function() {
+            const selectedCourseName = this.value;
+            const course = coursesData.find(c => c.name === selectedCourseName);
+            
+            tbKnowledge.innerHTML = '';
+            tbSkills.innerHTML = '';
+            tbValues.innerHTML = '';
+            
+            if (course && course.clos && course.clos.length > 0) {
+                course.clos.forEach((clo, idx) => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td style="padding: 0.5rem;">
+                            <textarea name="clo_text_${idx}" class="form-control" rows="2" style="width: 100%; resize: vertical;" required>${clo}</textarea>
+                        </td>
+                        <td style="padding: 0.5rem; vertical-align: top;">
+                            <input type="number" name="target_${idx}" class="form-control" value="60" min="1" max="100" required>
+                        </td>
+                    `;
+                    
+                    if (clo.startsWith('1.')) {
+                        tbKnowledge.appendChild(tr);
+                    } else if (clo.startsWith('2.')) {
+                        tbSkills.appendChild(tr);
+                    } else if (clo.startsWith('3.')) {
+                        tbValues.appendChild(tr);
+                    } else {
+                        // Fallback
+                        tbKnowledge.appendChild(tr);
+                    }
+                });
+            } else {
+                const emptyMsg = `<tr><td colspan="2" style="color: var(--text-muted); font-style: italic; text-align: center; font-size: 0.875rem;">Select a course to populate...</td></tr>`;
+                tbKnowledge.innerHTML = emptyMsg;
+                tbSkills.innerHTML = emptyMsg;
+                tbValues.innerHTML = emptyMsg;
+            }
+        });
+    });
+</script>
+{% endblock %}

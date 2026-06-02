@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
+        <h2 style="margin-top: 0;">Map Questions to CLOs</h2>
+        <a href="/" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Back to Upload</a>
+    </div>
+    <p style="color: var(--text-muted); margin-bottom: 2rem;">
+        For course: <strong>{{ course_name }}</strong><br>
+        We detected the following questions across the uploaded assessment file(s). Assign one or more CLOs to each question.
+    </p>
+
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+        <div style="border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; background: #f9fafb;">
+            <span style="display: block; color: var(--text-muted); font-size: 0.875rem;">Questions</span>
+            <strong style="font-size: 1.5rem; color: var(--accent);">{{ total_questions }}</strong>
+        </div>
+        <div style="border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; background: #f9fafb;">
+            <span style="display: block; color: var(--text-muted); font-size: 0.875rem;">Students</span>
+            <strong style="font-size: 1.5rem; color: var(--accent);">{{ total_students }}</strong>
+        </div>
+    </div>
+
+    {% if student_count_warning %}
+        <div class="alert" style="border-color: var(--danger); color: var(--danger); background: rgba(239, 68, 68, 0.08);">
+            {{ student_count_warning }}
+        </div>
+    {% endif %}
+
+    <form method="POST" action="/mapping">
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 160px;">Question</th>
+                    <th>Course Learning Outcome (CLO)</th>
+                    <th style="width: 160px;">Max Score</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for col in columns %}
+                <tr>
+                    <td><strong>{{ col }}</strong></td>
+                    <td>
+                        <select name="clo_{{ col }}" class="form-control" multiple size="5" style="padding: 0.5rem; background: var(--bg-base);">
+                            {% for clo in clos %}
+                                <option value="{{ clo }}" {% if existing_mapping.get(col) and clo in existing_mapping.get(col).get('clos', []) %}selected{% endif %}>{{ clo }}</option>
+                            {% endfor %}
+                        </select>
+                        <small style="color: var(--text-muted); display: block; margin-top: 0.4rem;">Hold Ctrl to select multiple CLOs.</small>
+                        <input type="text" class="form-control selected-clo-ids" style="margin-top: 0.5rem;" value="" placeholder="Selected CLO ID" readonly>
+                    </td>
+                    <td>
+                        <input type="number" step="0.5" min="0" name="max_{{ col }}" class="form-control" style="padding: 0.5rem;" value="{{ existing_mapping.get(col, {}).get('max_score', max_scores.get(col, 1)) }}" readonly>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <a href="/" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Back</a>
+            <button type="submit" class="btn">Calculate CLO Achievement</button>
+        </div>
+    </form>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        document.querySelectorAll('select[name^="clo_"]').forEach(function(select) {
+            const idField = select.closest('td').querySelector('.selected-clo-ids');
+            const updateIds = function() {
+                const ids = Array.from(select.selectedOptions).map(function(option) {
+                    const match = option.value.trim().match(/^(\d+(?:\.\d+)*)/);
+                    return match ? match[1] : option.value.trim();
+                });
+                idField.value = ids.join(', ');
+            };
+            select.addEventListener('change', updateIds);
+            updateIds();
+        });
+    });
+</script>
+{% endblock %}

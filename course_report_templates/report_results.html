@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+        <div>
+            <h2 style="margin-top: 0;">CLO Attainment Report</h2>
+            <p style="color: var(--text-muted); margin-bottom: 2rem;">
+                Total Students Evaluated: <strong>{{ total_students }}</strong>
+            </p>
+        </div>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end;">
+            <a href="/mapping" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Back to Mapping</a>
+            <a href="/" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Start Over</a>
+        </div>
+    </div>
+
+    {% if student_count_warning %}
+        <div class="alert" style="border-color: var(--danger); color: var(--danger); background: rgba(239, 68, 68, 0.08);">
+            {{ student_count_warning }}
+        </div>
+    {% endif %}
+
+    {% if stats %}
+    <table>
+        <thead>
+            <tr>
+                <th>CLO</th>
+                <th>Mapped Questions</th>
+                <th>Max Possible Score</th>
+                <th>Target</th>
+                <th>Students Achieved</th>
+                <th>Achievement %</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for clo, data in stats.items() %}
+            <tr>
+                <td><strong>{{ clo }}</strong></td>
+                <td style="color: var(--text-muted); font-size: 0.875rem;">{% for question in data.questions %}{{ format_question_label(question) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+                <td>{{ data.total_possible_score }}</td>
+                <td>{{ "%.2f"|format(data.target_score) }} <span style="color: var(--text-muted); font-size: 0.8em;">({{ "%.2f"|format(data.target_pct) }}%)</span></td>
+                <td>{{ data.students_achieved }}</td>
+                <td>
+                    {% if data.achievement_percentage >= 70 %}
+                        <span class="badge" style="background-color: rgba(16, 185, 129, 0.2); color: #34d399;">{{ data.achievement_percentage }}%</span>
+                    {% elif data.achievement_percentage >= 50 %}
+                        <span class="badge" style="background-color: rgba(245, 158, 11, 0.2); color: #fbbf24;">{{ data.achievement_percentage }}%</span>
+                    {% else %}
+                        <span class="badge" style="background-color: rgba(239, 68, 68, 0.2); color: #f87171;">{{ data.achievement_percentage }}%</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; margin-top: 1rem;">
+        <a href="/export-results/csv" class="btn">Export CSV</a>
+        <a href="/export-results/pdf" class="btn">Export PDF</a>
+    </div>
+    {% else %}
+    <div class="alert">
+        No mappings were provided. Please ensure you mapped at least one question to a CLO.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

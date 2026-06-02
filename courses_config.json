@@ -1,0 +1,16 @@
+{
+  "courses": [
+    {
+      "name": "Machine Learning for Data Science (DS2401)",
+      "clos": [
+        "1.1 Identify appropriate analysis tools and techniques.",
+        "1.2 Discuss the role of machine learning methods for solving real-world problems.",
+        "1.3 Explain and differentiate between at least three key methods and algorithms used in data science, highlighting their applications, strengths, and weaknesses.",
+        "2.1 Apply appropriate machine learning techniques to support problem solving and decision making.",
+        "2.2 Apply machine learning techniques to conduct research for real-world data science problems.",
+        "2.3 Show data interpretation abilities.",
+        "3.1 Evaluate and justify ethical decisionmaking in data collection, storage, processing, and sharing, ensuring compliance with relevant regulations."
+      ]
+    }
+  ]
+}
