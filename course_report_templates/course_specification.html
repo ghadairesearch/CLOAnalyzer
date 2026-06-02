@@ -37,11 +37,54 @@
                         <th>CLOs</th>
                         <td>
                             {% if extracted.clos %}
-                                <ul style="margin: 0; padding-left: 1.25rem;">
-                                    {% for clo in extracted.clos %}
-                                        <li>{{ clo }}</li>
-                                    {% endfor %}
-                                </ul>
+                                <div style="display: grid; gap: 1rem;">
+                                    <div>
+                                        <strong>1.0 Knowledge</strong>
+                                        {% if extracted.grouped_clos['knowledge'] %}
+                                            <ul style="margin: 0.5rem 0 0; padding-left: 1.25rem;">
+                                                {% for clo in extracted.grouped_clos['knowledge'] %}
+                                                    <li>{{ clo }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                        {% else %}
+                                            <p style="color: var(--text-muted); margin: 0.35rem 0 0;">No Knowledge CLOs detected.</p>
+                                        {% endif %}
+                                    </div>
+                                    <div>
+                                        <strong>2.0 Skills</strong>
+                                        {% if extracted.grouped_clos['skills'] %}
+                                            <ul style="margin: 0.5rem 0 0; padding-left: 1.25rem;">
+                                                {% for clo in extracted.grouped_clos['skills'] %}
+                                                    <li>{{ clo }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                        {% else %}
+                                            <p style="color: var(--text-muted); margin: 0.35rem 0 0;">No Skills CLOs detected.</p>
+                                        {% endif %}
+                                    </div>
+                                    <div>
+                                        <strong>3.0 Values</strong>
+                                        {% if extracted.grouped_clos['values'] %}
+                                            <ul style="margin: 0.5rem 0 0; padding-left: 1.25rem;">
+                                                {% for clo in extracted.grouped_clos['values'] %}
+                                                    <li>{{ clo }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                        {% else %}
+                                            <p style="color: var(--text-muted); margin: 0.35rem 0 0;">No Values CLOs detected.</p>
+                                        {% endif %}
+                                    </div>
+                                    {% if extracted.grouped_clos['other'] %}
+                                        <div>
+                                            <strong>Other</strong>
+                                            <ul style="margin: 0.5rem 0 0; padding-left: 1.25rem;">
+                                                {% for clo in extracted.grouped_clos['other'] %}
+                                                    <li>{{ clo }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                        </div>
+                                    {% endif %}
+                                </div>
                             {% else %}
                                 -
                             {% endif %}

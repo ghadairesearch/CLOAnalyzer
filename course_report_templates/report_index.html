@@ -104,6 +104,9 @@
             .then(res => res.json())
             .then(data => {
                 coursesData = data;
+                if (courseSelect.value) {
+                    courseSelect.dispatchEvent(new Event('change'));
+                }
             });
 
         form.addEventListener('submit', function(event) {
@@ -121,6 +124,9 @@
             tbKnowledge.innerHTML = '';
             tbSkills.innerHTML = '';
             tbValues.innerHTML = '';
+
+            const emptyMsg = `<tr><td colspan="2" style="color: var(--text-muted); font-style: italic; text-align: center; font-size: 0.875rem;">No CLOs detected for this category.</td></tr>`;
+            const selectMsg = `<tr><td colspan="2" style="color: var(--text-muted); font-style: italic; text-align: center; font-size: 0.875rem;">Select a course to populate...</td></tr>`;
             
             if (course && course.clos && course.clos.length > 0) {
                 course.clos.forEach((clo, idx) => {
@@ -145,17 +151,22 @@
                         tbKnowledge.appendChild(tr);
                     }
                 });
+
+                if (!tbKnowledge.children.length) {
+                    tbKnowledge.innerHTML = emptyMsg;
+                }
+                if (!tbSkills.children.length) {
+                    tbSkills.innerHTML = emptyMsg;
+                }
+                if (!tbValues.children.length) {
+                    tbValues.innerHTML = emptyMsg;
+                }
             } else {
-                const emptyMsg = `<tr><td colspan="2" style="color: var(--text-muted); font-style: italic; text-align: center; font-size: 0.875rem;">Select a course to populate...</td></tr>`;
-                tbKnowledge.innerHTML = emptyMsg;
-                tbSkills.innerHTML = emptyMsg;
-                tbValues.innerHTML = emptyMsg;
+                tbKnowledge.innerHTML = selectMsg;
+                tbSkills.innerHTML = selectMsg;
+                tbValues.innerHTML = selectMsg;
             }
         });
-
-        if (courseSelect.value) {
-            courseSelect.dispatchEvent(new Event('change'));
-        }
     });
 </script>
 {% endblock %}

@@ -36,6 +36,25 @@ def get_course_clos(course_name):
     courses = get_available_courses()
     return next((c.get('clos', []) for c in courses if c.get('name') == course_name), [])
 
+def group_clos_by_domain(clos):
+    grouped = {
+        'knowledge': [],
+        'skills': [],
+        'values': [],
+        'other': []
+    }
+    for clo in clos or []:
+        clo_text = str(clo).strip()
+        if clo_text.startswith('1.'):
+            grouped['knowledge'].append(clo_text)
+        elif clo_text.startswith('2.'):
+            grouped['skills'].append(clo_text)
+        elif clo_text.startswith('3.'):
+            grouped['values'].append(clo_text)
+        elif clo_text:
+            grouped['other'].append(clo_text)
+    return grouped
+
 def decode_pdf_string(value):
     value = value.replace(r'\\', '\u0000')
     value = value.replace(r'\(', '(').replace(r'\)', ')')
@@ -346,7 +365,8 @@ def extract_course_spec_metadata(text):
         'name': display_name,
         'course_name': course_name,
         'course_code': course_code,
-        'clos': clos
+        'clos': clos,
+        'grouped_clos': group_clos_by_domain(clos)
     }
 
 def question_number_from_label(label):
@@ -1169,8 +1189,7 @@ def mapping():
     # Use custom edited CLOs if available, otherwise load from config
     course_clos = session.get('custom_clos')
     if not course_clos:
-        courses = load_courses()
-        course_clos = next((c['clos'] for c in courses if c['name'] == course_name), [])
+        course_clos = get_course_clos(course_name)
 
     if request.method == 'POST':
         mapping_data = {}
