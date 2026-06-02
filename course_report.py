@@ -5,13 +5,14 @@ import csv
 import io
 import uuid
 import zlib
+import tempfile
 from datetime import datetime
 import pandas as pd
 from flask import Flask, render_template, request, redirect, url_for, session, flash, Response
 
 app = Flask(__name__, template_folder='course_report_templates', static_folder='public')
 app.secret_key = 'super_secret_key_for_course_report'
-UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_uploads')
+UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER') or os.path.join(tempfile.gettempdir(), 'clo_attainment_uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
