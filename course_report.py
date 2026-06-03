@@ -815,6 +815,25 @@ def get_column_by_alias(df, aliases):
             return column
     return None
 
+def get_column_by_flexible_alias(df, aliases):
+    exact = get_column_by_alias(df, aliases)
+    if exact is not None:
+        return exact
+
+    alias_labels = [normalize_report_label(alias) for alias in aliases]
+    compact_aliases = [re.sub(r'\s+', '', alias) for alias in alias_labels]
+    for column in df.columns:
+        label = normalize_report_label(column)
+        compact_label = re.sub(r'\s+', '', label)
+        for alias, compact_alias in zip(alias_labels, compact_aliases):
+            if len(compact_alias) < 3:
+                continue
+            if compact_alias in compact_label:
+                return column
+            if re.search(rf'\b{re.escape(alias)}\b', label):
+                return column
+    return None
+
 def get_tag_class_columns(df):
     columns = {
         'tag': get_column_by_alias(df, ['Tag', 'Tags', 'CLO', 'CLOs']),
@@ -836,6 +855,124 @@ def get_tag_class_question_rows(df, columns):
     rows['_question_number'] = rows['_question_number'].astype(int)
     rows = rows[rows['_question_number'] > 0]
     return rows
+
+def normalize_grade_item_label(value, fallback_prefix='Item'):
+    text = '' if pd.isna(value) else str(value).strip()
+    if not text:
+        return ''
+    number = question_number_from_label(text)
+    if number is None:
+        try:
+            if re.match(r'^\d+(?:\.0+)?$', text):
+                number = int(float(text))
+        except ValueError:
+            number = None
+    if number is not None:
+        return f'Q{number}'
+    return re.sub(r'\s+', ' ', text)
+
+def get_generic_long_grade_columns(df):
+    columns = {
+        'student_id': get_column_by_flexible_alias(df, [
+            'StudentID', 'Student ID', 'StudentExternalID', 'Student External ID',
+            'Student Number', 'Student No', 'Student', 'Students', 'ID', 'IDs',
+            'Learner ID', 'Name', 'Student Name'
+        ]),
+        'clo': get_column_by_flexible_alias(df, [
+            'CLO', 'CLOs', 'Course Learning Outcome', 'Course Learning Outcomes',
+            'Learning Outcome', 'Learning Outcomes', 'Learning Objective',
+            'Outcome', 'Outcomes', 'LO'
+        ]),
+        'question': get_column_by_flexible_alias(df, [
+            'QuestionNumber', 'Question Number', 'Question No', 'Question',
+            'Questions', 'Item Number', 'Item', 'Q'
+        ]),
+        'earned_points': get_column_by_flexible_alias(df, [
+            'EarnedPoints', 'Earned Points', 'Score', 'Student Score', 'Grade',
+            'Mark', 'Marks', 'Points Earned', 'Obtained Points', 'Earned',
+            'Result', 'Points'
+        ]),
+        'possible_points': get_column_by_flexible_alias(df, [
+            'PossiblePoints', 'Possible Points', 'Max Score', 'Maximum Score',
+            'Max Points', 'Possible', 'Out Of', 'Total Points', 'Point Value',
+            'Full Mark', 'Full Score', 'Total'
+        ]),
+    }
+
+    if not columns['student_id'] or not columns['earned_points']:
+        return None
+    if not columns['question'] and not columns['clo']:
+        return None
+    return columns
+
+def get_generic_long_grade_rows(df, columns):
+    rows = df.copy()
+    rows['_student_id'] = rows[columns['student_id']].map(normalize_student_id)
+    rows['_earned_points'] = pd.to_numeric(rows[columns['earned_points']], errors='coerce')
+    rows = rows[(rows['_student_id'] != '') & rows['_earned_points'].notna()].copy()
+    if rows.empty:
+        return rows
+
+    if columns.get('possible_points'):
+        rows['_possible_points'] = pd.to_numeric(rows[columns['possible_points']], errors='coerce')
+    else:
+        rows['_possible_points'] = pd.NA
+
+    if columns.get('question'):
+        rows['_question_label'] = rows[columns['question']].map(normalize_grade_item_label)
+    else:
+        rows['_question_label'] = rows[columns['clo']].map(lambda value: normalize_grade_item_label(value, 'CLO'))
+
+    rows = rows[rows['_question_label'] != ''].copy()
+    return rows
+
+def infer_generic_long_grade_metrics(df):
+    columns = get_generic_long_grade_columns(df)
+    if not columns:
+        return None
+
+    rows = get_generic_long_grade_rows(df, columns)
+    if rows.empty:
+        return None
+
+    questions = sorted(rows['_question_label'].unique(), key=lambda question: (0, int(question[1:])) if re.match(r'^Q\d+$', str(question)) else (1, str(question)))
+    max_scores = {}
+    detected_clo_mappings = {}
+    performance = {}
+
+    for question in questions:
+        question_rows = rows[rows['_question_label'] == question]
+        possible_values = pd.to_numeric(question_rows['_possible_points'], errors='coerce').dropna()
+        earned_values = pd.to_numeric(question_rows['_earned_points'], errors='coerce').dropna()
+        max_score = float(possible_values.max()) if not possible_values.empty else (float(earned_values.max()) if not earned_values.empty else 1.0)
+        max_scores[question] = max_score or 1.0
+
+        if columns.get('clo'):
+            tags = []
+            for value in question_rows[columns['clo']].dropna().unique():
+                tags.extend(split_clo_tags(value))
+            if tags:
+                detected_clo_mappings[question] = sorted(set(tags))
+
+        deduped = question_rows.sort_values('_earned_points').drop_duplicates('_student_id', keep='last')
+        answered = len(deduped)
+        achieved = int((deduped['_earned_points'] >= max_scores[question]).sum()) if answered else 0
+        performance[question] = {
+            'students_answered': answered,
+            'students_correct': achieved,
+            'correct_percentage': round((achieved / answered) * 100, 2) if answered else 0
+        }
+
+    return {
+        'questions': questions,
+        'total_questions': len(questions),
+        'total_students': len(set(rows['_student_id'])),
+        'confidence': 'High',
+        'text_sample': 'Detected generic grade table with student IDs, score columns, and question/CLO/learning outcome columns.',
+        'max_scores': max_scores,
+        'question_performance': performance,
+        'detected_clo_mappings': detected_clo_mappings
+    }
 
 def infer_tag_class_metrics(df):
     columns = get_tag_class_columns(df)
@@ -950,6 +1087,10 @@ def infer_simple_table_metrics(df):
     if tag_class_metrics:
         return tag_class_metrics
 
+    generic_long_metrics = infer_generic_long_grade_metrics(clean_df)
+    if generic_long_metrics:
+        return generic_long_metrics
+
     answer_key_metrics = infer_answer_key_mapping_metrics(clean_df)
     if answer_key_metrics:
         return answer_key_metrics
@@ -1029,6 +1170,10 @@ def infer_spreadsheet_metrics(filepath, file_ext):
         if tag_class_metrics:
             tag_class_metrics['text_sample'] = f"Detected tag class data from CSV. Rows: {df_with_headers.shape[0]}, columns: {df_with_headers.shape[1]}."
             return tag_class_metrics
+        generic_long_metrics = infer_generic_long_grade_metrics(df_with_headers)
+        if generic_long_metrics:
+            generic_long_metrics['text_sample'] = f"Detected generic grade data from CSV. Rows: {df_with_headers.shape[0]}, columns: {df_with_headers.shape[1]}."
+            return generic_long_metrics
 
         df = pd.read_csv(filepath, header=None)
         metrics = infer_simple_table_metrics(df)
@@ -1044,6 +1189,11 @@ def infer_spreadsheet_metrics(filepath, file_ext):
             tag_class_metrics = infer_tag_class_metrics(df_with_headers)
             if tag_class_metrics and (best_metrics is None or tag_class_metrics['total_questions'] > best_metrics['total_questions']):
                 best_metrics = tag_class_metrics
+                best_sheet = sheet_name
+                continue
+            generic_long_metrics = infer_generic_long_grade_metrics(df_with_headers)
+            if generic_long_metrics and (best_metrics is None or generic_long_metrics['total_questions'] > best_metrics['total_questions']):
+                best_metrics = generic_long_metrics
                 best_sheet = sheet_name
                 continue
 
@@ -1268,6 +1418,32 @@ def build_scores_from_tag_class_data(df, requested_questions):
         return None
     return score_df[available_questions].apply(pd.to_numeric, errors='coerce').fillna(0), 'numeric'
 
+def build_scores_from_generic_long_grade_data(df, requested_questions):
+    columns = get_generic_long_grade_columns(df)
+    if not columns:
+        return None
+
+    rows = get_generic_long_grade_rows(df, columns)
+    if rows.empty:
+        return None
+
+    requested = set(requested_questions)
+    rows = rows[rows['_question_label'].isin(requested)].copy()
+    if rows.empty:
+        return None
+
+    score_df = rows.pivot_table(
+        index='_student_id',
+        columns='_question_label',
+        values='_earned_points',
+        aggfunc='max',
+        fill_value=0
+    )
+    available_questions = [question for question in requested_questions if question in score_df.columns]
+    if not available_questions:
+        return None
+    return score_df[available_questions].apply(pd.to_numeric, errors='coerce').fillna(0), 'numeric'
+
 def build_score_dataframe(filepath, file_ext, requested_questions):
     requested_questions = list(requested_questions)
 
@@ -1285,6 +1461,9 @@ def build_score_dataframe(filepath, file_ext, requested_questions):
         tag_class_scores = build_scores_from_tag_class_data(df, requested_questions)
         if tag_class_scores:
             return tag_class_scores
+        generic_long_scores = build_scores_from_generic_long_grade_data(df, requested_questions)
+        if generic_long_scores:
+            return generic_long_scores
 
         if all(question in df.columns for question in requested_questions):
             score_df = df[requested_questions].apply(pd.to_numeric, errors='coerce').fillna(0)
@@ -1302,6 +1481,9 @@ def build_score_dataframe(filepath, file_ext, requested_questions):
         tag_class_scores = build_scores_from_tag_class_data(df, requested_questions)
         if tag_class_scores:
             return tag_class_scores
+        generic_long_scores = build_scores_from_generic_long_grade_data(df, requested_questions)
+        if generic_long_scores:
+            return generic_long_scores
 
         if all(question in df.columns for question in requested_questions):
             score_df = df[requested_questions].apply(pd.to_numeric, errors='coerce').fillna(0)

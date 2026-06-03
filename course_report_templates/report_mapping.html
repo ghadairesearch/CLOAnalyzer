@@ -115,7 +115,7 @@
                                     <input type="text" class="form-control selected-clo-ids" style="margin-top: 0.5rem;" value="" placeholder="Selected CLO ID" readonly>
                                 </td>
                                 <td>
-                                    <input type="number" step="0.5" min="0" name="max_{{ col }}" class="form-control" style="padding: 0.5rem;" value="{{ existing_mapping.get(col, {}).get('max_score', max_scores.get(col, 1)) }}">
+                                    <input type="number" step="any" min="0" name="max_{{ col }}" class="form-control" style="padding: 0.5rem;" value="{{ existing_mapping.get(col, {}).get('max_score', max_scores.get(col, 1)) }}">
                                 </td>
                             </tr>
                         {% endfor %}
