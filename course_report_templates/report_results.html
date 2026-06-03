@@ -10,8 +10,8 @@
             </p>
         </div>
         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end;">
-            <a href="/mapping" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Back to Mapping</a>
-            <a href="/start-over" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Start Over</a>
+            <a href="/export-results/csv" class="btn">Export CSV</a>
+            <a href="/export-results/pdf" class="btn">Export PDF</a>
         </div>
     </div>
 
@@ -57,9 +57,9 @@
             {% endfor %}
         </tbody>
     </table>
-    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; margin-top: 1rem;">
-        <a href="/export-results/csv" class="btn">Export CSV</a>
-        <a href="/export-results/pdf" class="btn">Export PDF</a>
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-start; margin-top: 1rem;">
+        <a href="/mapping" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Back to Mapping</a>
+        <a href="/start-over" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Start Over</a>
     </div>
     {% else %}
     <div class="alert">

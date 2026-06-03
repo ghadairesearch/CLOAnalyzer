@@ -16,6 +16,10 @@ UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER') or os.path.join(tempfile.gettemp
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
+def get_upload_path(filename):
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    return os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
 def load_courses():
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'courses_config.json')
     if os.path.exists(config_path):
@@ -1008,8 +1012,8 @@ def build_score_dataframe(filepath, file_ext, requested_questions):
         if score_df is not None:
             available_questions = [question for question in requested_questions if question in score_df.columns]
             if available_questions:
-                return score_df[available_questions].apply(pd.to_numeric, errors='coerce').fillna(0), 'binary'
-        return pd.DataFrame(columns=requested_questions), 'binary'
+                return score_df[available_questions].apply(pd.to_numeric, errors='coerce').fillna(0), 'numeric'
+        return pd.DataFrame(columns=requested_questions), 'numeric'
 
     if file_ext == '.csv':
         df = pd.read_csv(filepath)
@@ -1097,6 +1101,7 @@ def combine_assessment_metrics(assessment_files):
 
 def build_combined_score_dataframe(assessment_files, requested_questions):
     frames = []
+    column_modes = {}
     for assessment in assessment_files:
         local_questions = []
         rename_map = {}
@@ -1110,11 +1115,14 @@ def build_combined_score_dataframe(assessment_files, requested_questions):
         if not local_questions:
             continue
 
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], assessment['stored_name'])
-        score_df, _ = build_score_dataframe(filepath, assessment['ext'], local_questions)
+        filepath = get_upload_path(assessment['stored_name'])
+        score_df, score_mode = build_score_dataframe(filepath, assessment['ext'], local_questions)
         if score_df.empty:
             continue
         score_df = score_df.rename(columns=rename_map)
+        for local_question, combined_question in rename_map.items():
+            if combined_question in score_df.columns:
+                column_modes[combined_question] = score_mode
         score_df.index = [
             f"{assessment['label']}:{student_id}" if str(student_id).startswith("__missing_student_") else str(student_id)
             for student_id in score_df.index
@@ -1122,15 +1130,15 @@ def build_combined_score_dataframe(assessment_files, requested_questions):
         frames.append(score_df)
 
     if not frames:
-        return pd.DataFrame(columns=list(requested_questions)), 'binary'
+        return pd.DataFrame(columns=list(requested_questions)), {}
 
-    return pd.concat(frames, axis=1, join='outer').fillna(0), 'binary'
+    return pd.concat(frames, axis=1, join='outer').fillna(0), column_modes
 
 def get_assessment_student_ids(assessment, requested_questions=None):
     questions = requested_questions or (assessment.get('metrics', {}).get('questions') or [])
     if not questions:
         return set()
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], assessment['stored_name'])
+    filepath = get_upload_path(assessment['stored_name'])
     score_df, _ = build_score_dataframe(filepath, assessment['ext'], questions)
     return {
         f"{assessment.get('label', 'Assessment')}:{student_id}" if str(student_id).startswith("__missing_student_") else str(student_id)
@@ -1186,7 +1194,7 @@ def calculate_clo_results():
     if assessment_files:
         score_df, score_mode = build_combined_score_dataframe(assessment_files, mapping_data.keys())
     else:
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], f"{file_id}{file_ext}")
+        filepath = get_upload_path(f"{file_id}{file_ext}")
         score_df, score_mode = build_score_dataframe(filepath, file_ext, mapping_data.keys())
     total_students = len(score_df)
     if total_students == 0:
@@ -1215,7 +1223,8 @@ def calculate_clo_results():
             if col not in score_df.columns:
                 continue
             question_max = mapping_data.get(col, {}).get('max_score', 1.0)
-            if score_mode == 'binary':
+            question_mode = score_mode.get(col, 'numeric') if isinstance(score_mode, dict) else score_mode
+            if question_mode == 'binary':
                 student_scores = student_scores + (score_df[col].fillna(0).astype(float) * question_max)
             else:
                 student_scores = student_scores + score_df[col].fillna(0).astype(float)
@@ -1639,7 +1648,7 @@ def course_specification():
             return redirect(request.url)
 
         file_id = str(uuid.uuid4())
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], f"{file_id}{file_ext}")
+        filepath = get_upload_path(f"{file_id}{file_ext}")
         file.save(filepath)
 
         try:
@@ -1679,7 +1688,7 @@ def analyze_report():
         return redirect(url_for('index'))
 
     file_id = str(uuid.uuid4())
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], f"{file_id}{file_ext}")
+    filepath = get_upload_path(f"{file_id}{file_ext}")
     file.save(filepath)
 
     try:
@@ -1824,7 +1833,7 @@ def index():
 
             file_id = str(uuid.uuid4())
             stored_name = f"{file_id}{file_ext}"
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], stored_name)
+            filepath = get_upload_path(stored_name)
             file.save(filepath)
 
             try:
@@ -1894,7 +1903,7 @@ def mapping():
     numeric_cols = []
     fallback_student_count = 0
     if not assessment_files:
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], f"{file_id}{file_ext}")
+        filepath = get_upload_path(f"{file_id}{file_ext}")
         try:
             if file_ext == '.csv':
                 df = pd.read_csv(filepath)
