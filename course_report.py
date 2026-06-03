@@ -2044,13 +2044,37 @@ def build_results_pdf(stats, total_students, course_info):
 def api_courses():
     return json.dumps(get_available_courses())
 
+def delete_session_uploads():
+    for assessment in session.get('assessment_files') or []:
+        stored_name = assessment.get('stored_name')
+        if not stored_name:
+            continue
+        filepath = get_upload_path(stored_name)
+        if os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except OSError:
+                pass
+
+    file_id = session.get('file_id')
+    file_ext = session.get('file_ext')
+    if file_id and file_ext:
+        filepath = get_upload_path(f"{file_id}{file_ext}")
+        if os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except OSError:
+                pass
+
 @app.route('/start-over')
 def start_over():
+    delete_session_uploads()
     session.clear()
     return redirect(url_for('index'))
 
 @app.route('/back-to-upload')
 def back_to_upload():
+    delete_session_uploads()
     upload_only_keys = [
         'assessment_files',
         'file_id',
@@ -2062,6 +2086,10 @@ def back_to_upload():
         session.pop(key, None)
     session.modified = True
     return redirect(url_for('index'))
+
+@app.route('/privacy-policy')
+def privacy_policy():
+    return render_template('privacy_policy.html')
 
 @app.route('/course-specification', methods=['GET', 'POST'])
 def course_specification():

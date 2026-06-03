@@ -7,7 +7,8 @@
     <script>
         (function() {
             const sessionKey = 'clo_attainment_browser_session';
-            if (!sessionStorage.getItem(sessionKey) && window.location.pathname !== '/start-over') {
+            const resetExemptPaths = ['/start-over', '/privacy-policy'];
+            if (!sessionStorage.getItem(sessionKey) && !resetExemptPaths.includes(window.location.pathname)) {
                 sessionStorage.setItem(sessionKey, 'active');
                 window.location.replace('/start-over');
             } else {
@@ -193,7 +194,10 @@
         {% block content %}{% endblock %}
     </div>
     <div class="footer">
-        all right reseved Ghader Kurdi
+        <div>all right reseved Ghader Kurdi</div>
+        <div style="margin-top: 0.4rem;">
+            <a href="/privacy-policy" style="color: var(--accent); font-weight: 600; text-decoration: underline;">Privacy Policy</a>
+        </div>
     </div>
 </body>
 </html>
