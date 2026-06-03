@@ -57,6 +57,43 @@
             {% endfor %}
         </tbody>
     </table>
+
+    {% if student_achievement_matrix and student_achievement_matrix.students %}
+    <h3 style="margin-top: 2rem;">Student CLO Achievement</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Student ID</th>
+                {% for clo in student_achievement_matrix.clos %}
+                    <th>{{ clo }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for student_id in student_achievement_matrix.students %}
+            <tr>
+                <td><strong>{{ student_id }}</strong></td>
+                {% for clo in student_achievement_matrix.clos %}
+                    {% set cell = student_achievement_matrix.cells.get(student_id, {}).get(clo) %}
+                    <td>
+                    {% if cell %}
+                        <div>{{ "%.2f"|format(cell.score) }}</div>
+                        {% if cell.achieved %}
+                            <span class="badge" style="background-color: rgba(16, 185, 129, 0.2); color: #34d399;">Achieved</span>
+                        {% else %}
+                            <span class="badge" style="background-color: rgba(239, 68, 68, 0.2); color: #f87171;">Not Achieved</span>
+                        {% endif %}
+                    {% else %}
+                        <span style="color: var(--text-muted);">-</span>
+                    {% endif %}
+                    </td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
     <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-start; margin-top: 1rem;">
         <a href="/mapping" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Back to Mapping</a>
         <a href="/start-over" class="btn" style="background-color: var(--border-color); color: var(--text-main);">Start Over</a>

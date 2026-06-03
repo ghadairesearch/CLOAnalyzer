@@ -1648,7 +1648,7 @@ def calculate_clo_results():
     mapping_data = session.get('mapping', {})
 
     if not (assessment_files or file_id) or not mapping_data:
-        return None, 0, "No mappings were provided."
+        return None, 0, [], "No mappings were provided."
 
     if assessment_files:
         score_df, score_mode = build_combined_score_dataframe(assessment_files, mapping_data.keys())
@@ -1657,7 +1657,7 @@ def calculate_clo_results():
         score_df, score_mode = build_score_dataframe(filepath, file_ext, mapping_data.keys())
     total_students = len(score_df)
     if total_students == 0:
-        return None, 0, "Could not calculate scores from the uploaded file. Please check that the selected questions exist in the file."
+        return None, 0, [], "Could not calculate scores from the uploaded file. Please check that the selected questions exist in the file."
 
     clo_stats = {}
     for col, data in mapping_data.items():
@@ -1671,6 +1671,7 @@ def calculate_clo_results():
             clo_stats[clo]['questions'].append(col)
             clo_stats[clo]['total_possible_score'] += data['max_score']
 
+    student_achievement_rows = []
     for clo, stats in clo_stats.items():
         cols = stats['questions']
         max_possible = stats['total_possible_score']
@@ -1693,8 +1694,57 @@ def calculate_clo_results():
         stats['achievement_percentage'] = round((achieved_count / total_students) * 100, 2) if total_students > 0 else 0
         stats['target_score'] = round(target_score, 2)
         stats['target_pct'] = round(clo_target_pct, 2)
+        stats['student_scores'] = {
+            str(student_id): round(float(score), 2)
+            for student_id, score in student_scores.items()
+        }
 
-    return clo_stats, total_students, None
+        for student_id, score in student_scores.items():
+            achieved = float(score) >= target_score
+            student_achievement_rows.append({
+                'student_id': str(student_id),
+                'clo': clo,
+                'score': round(float(score), 2),
+                'target_score': round(target_score, 2),
+                'target_pct': round(clo_target_pct, 2),
+                'achieved': achieved,
+                'status': 'Achieved' if achieved else 'Not Achieved'
+            })
+
+    student_achievement_rows.sort(key=lambda row: (row['student_id'], row['clo']))
+    return clo_stats, total_students, student_achievement_rows, None
+
+def build_student_achievement_matrix(student_achievement_rows, clo_order=None):
+    clo_order = list(clo_order or [])
+    clo_set = set(clo_order)
+    student_ids = []
+    student_set = set()
+    matrix = {}
+
+    for row in student_achievement_rows or []:
+        student_id = str(row.get('student_id', ''))
+        clo = row.get('clo', '')
+        if not student_id or not clo:
+            continue
+        if student_id not in student_set:
+            student_ids.append(student_id)
+            student_set.add(student_id)
+        if clo not in clo_set:
+            clo_order.append(clo)
+            clo_set.add(clo)
+        matrix.setdefault(student_id, {})[clo] = {
+            'score': row.get('score', 0),
+            'target_score': row.get('target_score', 0),
+            'target_pct': row.get('target_pct', 0),
+            'achieved': row.get('achieved', False),
+            'status': row.get('status', 'Not Achieved')
+        }
+
+    return {
+        'students': student_ids,
+        'clos': clo_order,
+        'cells': matrix
+    }
 
 def get_course_report_info():
     raw_name = session.get('course_name') or ''
@@ -1888,7 +1938,7 @@ def draw_pdf_lines(parts, lines, x, top_y, size=7, line_height=9, font="F1"):
     for index, line in enumerate(lines):
         pdf_text(parts, x, top_y - (index * line_height), line, size, font)
 
-def build_results_pdf(stats, total_students, course_info):
+def build_results_pdf(stats, total_students, course_info, student_achievement_rows=None):
     logo_path = os.path.join(app.static_folder, 'logo.jpg')
     logo_bytes = b''
     logo_width = 0
@@ -1989,6 +2039,70 @@ def build_results_pdf(stats, total_students, course_info):
         pdf_text(current_parts, table_x + 455, number_y, str(data['students_achieved']), 7.5, "F1")
         pdf_text(current_parts, table_x + 500, number_y, f"{data['achievement_percentage']:.2f}%", 7.5, "F1")
         y = row_y
+
+    student_achievement_matrix = build_student_achievement_matrix(student_achievement_rows, stats.keys())
+    if student_achievement_matrix['students']:
+        student_table_x = 40
+
+        def draw_student_table_header(parts, y_position, clo_chunk, col_widths):
+            headers = ["Student ID"] + clo_chunk
+            parts.append("0.102 0.396 0.420 rg")
+            pdf_rect(parts, student_table_x, y_position, sum(col_widths), 26, True)
+            parts.append("1 1 1 rg")
+            header_x = student_table_x + 5
+            for header, width in zip(headers, col_widths):
+                header_lines = wrap_pdf_text(header, max(8, int(width / 5)))
+                draw_pdf_lines(parts, header_lines[:2], header_x, y_position + 17, 6.5, 8, "F2")
+                header_x += width
+            parts.append("0 0 0 rg")
+            parts.append("0.835 0.855 0.890 RG")
+
+        def new_student_page(clo_chunk, col_widths):
+            parts = []
+            parts.append("0.102 0.396 0.420 RG")
+            parts.append("0.102 0.396 0.420 rg")
+            pdf_text(parts, 40, 755, "Student CLO Achievement", 14, "F2")
+            parts.append("0.608 0.494 0.333 RG")
+            pdf_line(parts, 40, 740, 560, 740)
+            parts.append("0 0 0 RG")
+            parts.append("0 0 0 rg")
+            pdf_text(parts, 40, 720, f"Course Name: {course_info.get('course_name', '')}", 9, "F1")
+            pdf_text(parts, 330, 720, f"Report Date: {report_date}", 9, "F1")
+            draw_student_table_header(parts, 680, clo_chunk, col_widths)
+            page_contents.append(parts)
+            return parts, 680
+
+        clo_chunks = [
+            student_achievement_matrix['clos'][index:index + 4]
+            for index in range(0, len(student_achievement_matrix['clos']), 4)
+        ]
+        for clo_chunk in clo_chunks:
+            col_widths = [95] + [int(445 / max(len(clo_chunk), 1))] * len(clo_chunk)
+            current_parts, y = new_student_page(clo_chunk, col_widths)
+            for student_id in student_achievement_matrix['students']:
+                row_height = 34
+                if y - row_height < 55:
+                    current_parts, y = new_student_page(clo_chunk, col_widths)
+
+                row_y = y - row_height
+                pdf_rect(current_parts, student_table_x, row_y, sum(col_widths), row_height, False)
+                x = student_table_x
+                for width in col_widths[:-1]:
+                    x += width
+                    pdf_line(current_parts, x, row_y, x, row_y + row_height)
+
+                pdf_text(current_parts, student_table_x + 5, row_y + 15, student_id, 7.5, "F1")
+                cell_x = student_table_x + col_widths[0]
+                for clo, width in zip(clo_chunk, col_widths[1:]):
+                    cell = student_achievement_matrix['cells'].get(student_id, {}).get(clo)
+                    if cell:
+                        status = "Achieved" if cell.get('achieved') else "Not Achieved"
+                        pdf_text(current_parts, cell_x + 5, row_y + 19, f"{cell.get('score', 0):.2f}", 7.5, "F1")
+                        pdf_text(current_parts, cell_x + 5, row_y + 8, status, 6.8, "F1")
+                    else:
+                        pdf_text(current_parts, cell_x + 5, row_y + 15, "-", 7.5, "F1")
+                    cell_x += width
+                y = row_y
 
     for parts in page_contents:
         parts.append("0.5 0.5 0.5 rg")
@@ -2465,14 +2579,17 @@ def mapping():
 
 @app.route('/results')
 def results():
-    stats, total_students, error = calculate_clo_results()
+    stats, total_students, student_achievement_rows, error = calculate_clo_results()
     if error:
         flash(error)
         return redirect(url_for('index'))
+    student_achievement_matrix = build_student_achievement_matrix(student_achievement_rows, stats.keys())
 
     return render_template('report_results.html',
                            stats=stats,
                            total_students=total_students,
+                           student_achievement_rows=student_achievement_rows,
+                           student_achievement_matrix=student_achievement_matrix,
                            format_question_label=format_question_label,
                            format_mapped_questions_for_report=format_mapped_questions_for_report,
                            student_count_warning=(session.get('report_metrics') or {}).get('student_count_warning', ''))
@@ -2480,7 +2597,7 @@ def results():
 @app.route('/export-results/csv')
 def export_results_csv():
     try:
-        stats, total_students, error = calculate_clo_results()
+        stats, total_students, student_achievement_rows, error = calculate_clo_results()
     except Exception as e:
         flash(f"Error exporting CSV: {e}")
         return redirect(url_for('index'))
@@ -2510,6 +2627,20 @@ def export_results_csv():
             f"{data['achievement_percentage']:.2f}"
         ])
 
+    writer.writerow([])
+    student_achievement_matrix = build_student_achievement_matrix(student_achievement_rows, stats.keys())
+    writer.writerow(["Student CLO Achievement"])
+    writer.writerow(["Student ID"] + student_achievement_matrix['clos'])
+    for student_id in student_achievement_matrix['students']:
+        row_values = [student_id]
+        for clo in student_achievement_matrix['clos']:
+            cell = student_achievement_matrix['cells'].get(student_id, {}).get(clo)
+            if cell:
+                row_values.append(f"{cell['score']:.2f} - {cell['status']}")
+            else:
+                row_values.append("")
+        writer.writerow(row_values)
+
     response = Response("\ufeff" + output.getvalue(), mimetype="text/csv; charset=utf-8")
     response.headers["Content-Disposition"] = 'attachment; filename="clo_achievement_report.csv"'
     return response
@@ -2517,7 +2648,7 @@ def export_results_csv():
 @app.route('/export-results/pdf')
 def export_results_pdf():
     try:
-        stats, total_students, error = calculate_clo_results()
+        stats, total_students, student_achievement_rows, error = calculate_clo_results()
     except Exception as e:
         flash(f"Error exporting PDF: {e}")
         return redirect(url_for('index'))
@@ -2526,7 +2657,7 @@ def export_results_pdf():
         flash(error)
         return redirect(url_for('index'))
 
-    pdf_bytes = build_results_pdf(stats, total_students, get_course_report_info())
+    pdf_bytes = build_results_pdf(stats, total_students, get_course_report_info(), student_achievement_rows)
     response = Response(pdf_bytes, mimetype="application/pdf")
     response.headers["Content-Disposition"] = 'attachment; filename="clo_achievement_report.pdf"'
     return response
