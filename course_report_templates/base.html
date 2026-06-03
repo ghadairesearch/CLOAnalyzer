@@ -4,6 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CLO Attainment Report Generator</title>
+    <script>
+        (function() {
+            const sessionKey = 'clo_attainment_browser_session';
+            if (!sessionStorage.getItem(sessionKey) && window.location.pathname !== '/start-over') {
+                sessionStorage.setItem(sessionKey, 'active');
+                window.location.replace('/start-over');
+            } else {
+                sessionStorage.setItem(sessionKey, 'active');
+            }
+        })();
+    </script>
     <style>
         :root {
             --bg-base: #f9fafb;

@@ -730,10 +730,229 @@ def summarize_question_sheet_performance(df, header_info):
         }
     return performance
 
+def find_answer_key_mapping_table(df):
+    clean_df = df.dropna(how='all')
+    if clean_df.empty:
+        return None
+
+    for row_position, (_, row) in enumerate(clean_df.iterrows()):
+        normalized_headers = {
+            normalize_report_label(value): col_index
+            for col_index, value in row.items()
+            if not pd.isna(value) and str(value).strip()
+        }
+        question_col = next((col for label, col in normalized_headers.items() if label in {'question number', 'question no', 'question'}), None)
+        point_col = next((col for label, col in normalized_headers.items() if label in {'point value', 'points', 'point', 'score'}), None)
+        tags_col = next((col for label, col in normalized_headers.items() if label in {'tags', 'tag', 'clo', 'clos'}), None)
+        response_col = next((col for label, col in normalized_headers.items() if label in {'response/mapping', 'response', 'mapping', 'answer'}), None)
+
+        if question_col is not None and (point_col is not None or tags_col is not None):
+            return {
+                'row_position': row_position,
+                'question_col': question_col,
+                'point_col': point_col,
+                'tags_col': tags_col,
+                'response_col': response_col,
+            }
+    return None
+
+def split_clo_tags(value):
+    if pd.isna(value):
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    tags = re.split(r'[,;/|]+', text)
+    return [tag.strip() for tag in tags if tag.strip()]
+
+def clo_number_key(value):
+    text = str(value or '').strip()
+    clo_match = re.search(r'\bCLO\s*[-_ ]?(\d+(?:\.\d+)*)', text, flags=re.I)
+    if clo_match:
+        return clo_match.group(1)
+    leading_match = re.match(r'^\s*(\d+(?:\.\d+)*)\b', text)
+    if leading_match:
+        return leading_match.group(1)
+    return ''
+
+def resolve_detected_clos_to_course_list(detected_clos, course_clos):
+    by_text = {str(clo).strip().lower(): clo for clo in course_clos or []}
+    numbered_clos = []
+    for clo in course_clos or []:
+        key = clo_number_key(clo)
+        if key:
+            numbered_clos.append((key, clo))
+
+    resolved = []
+    for detected_clo in detected_clos or []:
+        detected_text = str(detected_clo).strip()
+        detected_key = clo_number_key(detected_text)
+        exact_text_match = by_text.get(detected_text.lower())
+        if exact_text_match and exact_text_match not in resolved:
+            resolved.append(exact_text_match)
+            continue
+
+        if not detected_key:
+            continue
+
+        matches = [
+            clo
+            for key, clo in numbered_clos
+            if key == detected_key or key.startswith(f"{detected_key}.")
+        ]
+        for matched in matches:
+            if matched not in resolved:
+                resolved.append(matched)
+    return resolved
+
+def get_column_by_alias(df, aliases):
+    alias_set = {normalize_report_label(alias) for alias in aliases}
+    compact_alias_set = {re.sub(r'\s+', '', alias) for alias in alias_set}
+    for column in df.columns:
+        label = normalize_report_label(column)
+        compact_label = re.sub(r'\s+', '', label)
+        if label in alias_set or compact_label in compact_alias_set:
+            return column
+    return None
+
+def get_tag_class_columns(df):
+    columns = {
+        'tag': get_column_by_alias(df, ['Tag', 'Tags', 'CLO', 'CLOs']),
+        'student_id': get_column_by_alias(df, ['StudentID', 'Student ID', 'StudentExternalID', 'Student External ID']),
+        'tag_type': get_column_by_alias(df, ['TagType', 'Tag Type']),
+        'question_number': get_column_by_alias(df, ['QuestionNumber', 'Question Number']),
+        'earned_points': get_column_by_alias(df, ['EarnedPoints', 'Earned Points']),
+        'possible_points': get_column_by_alias(df, ['PossiblePoints', 'Possible Points']),
+    }
+    required = ['tag', 'student_id', 'tag_type', 'question_number', 'earned_points', 'possible_points']
+    return columns if all(columns.get(key) is not None for key in required) else None
+
+def get_tag_class_question_rows(df, columns):
+    rows = df.copy()
+    tag_type = rows[columns['tag_type']].astype(str).str.strip().str.lower()
+    rows = rows[tag_type == 'question'].copy()
+    rows['_question_number'] = pd.to_numeric(rows[columns['question_number']], errors='coerce')
+    rows = rows.dropna(subset=['_question_number'])
+    rows['_question_number'] = rows['_question_number'].astype(int)
+    rows = rows[rows['_question_number'] > 0]
+    return rows
+
+def infer_tag_class_metrics(df):
+    columns = get_tag_class_columns(df)
+    if not columns:
+        return None
+
+    question_rows = get_tag_class_question_rows(df, columns)
+    if question_rows.empty:
+        return None
+
+    question_numbers = sorted(question_rows['_question_number'].unique())
+    questions = [f'Q{number}' for number in question_numbers]
+    max_scores = {}
+    detected_clo_mappings = {}
+    performance = {}
+
+    for number in question_numbers:
+        question = f'Q{number}'
+        rows = question_rows[question_rows['_question_number'] == number]
+        possible_values = pd.to_numeric(rows[columns['possible_points']], errors='coerce').dropna()
+        max_scores[question] = float(possible_values.max()) if not possible_values.empty else 1.0
+
+        tags = []
+        for value in rows[columns['tag']].dropna().unique():
+            tags.extend(split_clo_tags(value))
+        detected_clo_mappings[question] = sorted(set(tags))
+
+        deduped = rows.copy()
+        deduped['_student_id'] = deduped[columns['student_id']].map(normalize_student_id)
+        deduped['_earned_points'] = pd.to_numeric(deduped[columns['earned_points']], errors='coerce').fillna(0)
+        deduped['_possible_points'] = pd.to_numeric(deduped[columns['possible_points']], errors='coerce').fillna(max_scores[question])
+        deduped = deduped.sort_values('_earned_points').drop_duplicates('_student_id', keep='last')
+        answered = len(deduped)
+        achieved = int((deduped['_earned_points'] >= deduped['_possible_points']).sum()) if answered else 0
+        performance[question] = {
+            'students_answered': answered,
+            'students_correct': achieved,
+            'correct_percentage': round((achieved / answered) * 100, 2) if answered else 0
+        }
+
+    student_ids = question_rows[columns['student_id']].map(normalize_student_id)
+    total_students = len({student_id for student_id in student_ids if student_id})
+
+    return {
+        'questions': questions,
+        'total_questions': len(questions),
+        'total_students': total_students,
+        'confidence': 'High',
+        'text_sample': 'Detected long-form tag class data with student question scores, possible points, and CLO tags.',
+        'max_scores': max_scores,
+        'question_performance': performance,
+        'detected_clo_mappings': detected_clo_mappings
+    }
+
+def infer_answer_key_mapping_metrics(df):
+    table_info = find_answer_key_mapping_table(df)
+    if not table_info:
+        return None
+
+    rows = df.dropna(how='all').iloc[table_info['row_position'] + 1:]
+    questions = []
+    max_scores = {}
+    detected_clo_mappings = {}
+
+    for _, row in rows.iterrows():
+        question_raw = row[table_info['question_col']]
+        if pd.isna(question_raw) or str(question_raw).strip() == '':
+            continue
+
+        question_number = question_number_from_label(question_raw)
+        if question_number is None:
+            try:
+                question_number = int(float(str(question_raw).strip()))
+            except ValueError:
+                continue
+
+        question = f'Q{question_number}'
+        questions.append(question)
+
+        if table_info['point_col'] is not None:
+            point_value = pd.to_numeric(row[table_info['point_col']], errors='coerce')
+            max_scores[question] = float(point_value) if not pd.isna(point_value) else 1.0
+        else:
+            max_scores[question] = 1.0
+
+        if table_info['tags_col'] is not None:
+            tags = split_clo_tags(row[table_info['tags_col']])
+            if tags:
+                detected_clo_mappings[question] = tags
+
+    questions = sorted(set(questions), key=lambda question: int(question[1:]))
+    if not questions:
+        return None
+
+    return {
+        'questions': questions,
+        'total_questions': len(questions),
+        'total_students': 0,
+        'confidence': 'High',
+        'text_sample': 'Detected answer-key mapping table with point values and CLO tags. Upload student score/response files as well to calculate student achievement.',
+        'max_scores': max_scores,
+        'question_performance': {},
+        'detected_clo_mappings': detected_clo_mappings
+    }
+
 def infer_simple_table_metrics(df):
     clean_df = df.dropna(how='all')
     if clean_df.empty:
         return None
+
+    tag_class_metrics = infer_tag_class_metrics(clean_df)
+    if tag_class_metrics:
+        return tag_class_metrics
+
+    answer_key_metrics = infer_answer_key_mapping_metrics(clean_df)
+    if answer_key_metrics:
+        return answer_key_metrics
 
     header_info = find_question_header_row(clean_df)
     if header_info:
@@ -805,6 +1024,12 @@ def infer_spreadsheet_metrics(filepath, file_ext):
             return metrics
 
     if file_ext == '.csv':
+        df_with_headers = pd.read_csv(filepath)
+        tag_class_metrics = infer_tag_class_metrics(df_with_headers)
+        if tag_class_metrics:
+            tag_class_metrics['text_sample'] = f"Detected tag class data from CSV. Rows: {df_with_headers.shape[0]}, columns: {df_with_headers.shape[1]}."
+            return tag_class_metrics
+
         df = pd.read_csv(filepath, header=None)
         metrics = infer_simple_table_metrics(df)
         if metrics:
@@ -815,6 +1040,13 @@ def infer_spreadsheet_metrics(filepath, file_ext):
         best_metrics = None
         best_sheet = None
         for sheet_name in workbook.sheet_names:
+            df_with_headers = pd.read_excel(filepath, sheet_name=sheet_name)
+            tag_class_metrics = infer_tag_class_metrics(df_with_headers)
+            if tag_class_metrics and (best_metrics is None or tag_class_metrics['total_questions'] > best_metrics['total_questions']):
+                best_metrics = tag_class_metrics
+                best_sheet = sheet_name
+                continue
+
             df = pd.read_excel(filepath, sheet_name=sheet_name, header=None)
             metrics = infer_simple_table_metrics(df)
             if metrics and (best_metrics is None or metrics['total_questions'] > best_metrics['total_questions']):
@@ -1003,6 +1235,39 @@ def build_scores_from_question_sheet(df, requested_questions):
     student_ids = [row.iloc[0] if len(row) else '' for row in student_rows]
     return apply_student_id_index(score_df, student_ids), 'binary' if answer_key else 'numeric'
 
+def build_scores_from_tag_class_data(df, requested_questions):
+    columns = get_tag_class_columns(df)
+    if not columns:
+        return None
+
+    requested = set(requested_questions)
+    question_rows = get_tag_class_question_rows(df, columns)
+    if question_rows.empty:
+        return None
+
+    question_rows['_question_label'] = question_rows['_question_number'].map(lambda number: f'Q{int(number)}')
+    question_rows = question_rows[question_rows['_question_label'].isin(requested)].copy()
+    if question_rows.empty:
+        return None
+
+    question_rows['_student_id'] = question_rows[columns['student_id']].map(normalize_student_id)
+    question_rows['_earned_points'] = pd.to_numeric(question_rows[columns['earned_points']], errors='coerce').fillna(0)
+    question_rows = question_rows[question_rows['_student_id'] != '']
+    if question_rows.empty:
+        return None
+
+    score_df = question_rows.pivot_table(
+        index='_student_id',
+        columns='_question_label',
+        values='_earned_points',
+        aggfunc='max',
+        fill_value=0
+    )
+    available_questions = [question for question in requested_questions if question in score_df.columns]
+    if not available_questions:
+        return None
+    return score_df[available_questions].apply(pd.to_numeric, errors='coerce').fillna(0), 'numeric'
+
 def build_score_dataframe(filepath, file_ext, requested_questions):
     requested_questions = list(requested_questions)
 
@@ -1017,6 +1282,10 @@ def build_score_dataframe(filepath, file_ext, requested_questions):
 
     if file_ext == '.csv':
         df = pd.read_csv(filepath)
+        tag_class_scores = build_scores_from_tag_class_data(df, requested_questions)
+        if tag_class_scores:
+            return tag_class_scores
+
         if all(question in df.columns for question in requested_questions):
             score_df = df[requested_questions].apply(pd.to_numeric, errors='coerce').fillna(0)
             id_column = detect_student_id_column(df, requested_questions)
@@ -1030,6 +1299,10 @@ def build_score_dataframe(filepath, file_ext, requested_questions):
             return scores
     else:
         df = pd.read_excel(filepath)
+        tag_class_scores = build_scores_from_tag_class_data(df, requested_questions)
+        if tag_class_scores:
+            return tag_class_scores
+
         if all(question in df.columns for question in requested_questions):
             score_df = df[requested_questions].apply(pd.to_numeric, errors='coerce').fillna(0)
             id_column = detect_student_id_column(df, requested_questions)
@@ -1053,6 +1326,7 @@ def combine_assessment_metrics(assessment_files):
     combined_questions = []
     combined_max_scores = {}
     combined_question_performance = {}
+    combined_detected_clo_mappings = {}
     total_students = 0
     notes = []
     student_counts = {}
@@ -1073,6 +1347,8 @@ def combine_assessment_metrics(assessment_files):
             combined_max_scores[combined] = metrics.get('max_scores', {}).get(question, 1.0)
             if metrics.get('question_performance', {}).get(question):
                 combined_question_performance[combined] = metrics['question_performance'][question]
+            if metrics.get('detected_clo_mappings', {}).get(question):
+                combined_detected_clo_mappings[combined] = metrics['detected_clo_mappings'][question]
 
         total_students = max(total_students, metrics.get('total_students') or 0)
         if metrics.get('text_sample'):
@@ -1095,6 +1371,7 @@ def combine_assessment_metrics(assessment_files):
         'text_sample': ' '.join(notes),
         'max_scores': combined_max_scores,
         'question_performance': combined_question_performance,
+        'detected_clo_mappings': combined_detected_clo_mappings,
         'student_counts': student_counts,
         'student_count_warning': student_count_warning
     }
@@ -1784,7 +2061,6 @@ def index():
             target_percentages = {"_global": global_target}
         
         assessment_files = []
-        existing_assessment_files = session.get('assessment_files') or []
 
         allowed_assessment_types = {'Quiz', 'Assignment', 'Midterm', 'Final', 'Project'}
         pending_uploads = []
@@ -1856,11 +2132,6 @@ def index():
                 'metrics': metrics
             })
 
-        reused_existing_files = False
-        if not assessment_files and existing_assessment_files:
-            assessment_files = existing_assessment_files
-            reused_existing_files = True
-
         if not assessment_files:
             flash("Please upload at least one Quiz, Assignment, Midterm, Final, or Project file.", "error")
             return redirect(request.url)
@@ -1873,8 +2144,7 @@ def index():
         session['target_percentages'] = target_percentages
         session['custom_clos'] = custom_clos
         session['report_metrics'] = report_metrics
-        if not reused_existing_files:
-            session.pop('mapping', None)
+        session.pop('mapping', None)
 
         return redirect(url_for('mapping'))
             
@@ -1884,8 +2154,7 @@ def index():
         courses=courses,
         selected_course_name=selected_course_name,
         saved_target_percentages=session.get('target_percentages', {}),
-        saved_custom_clos=session.get('custom_clos', []),
-        saved_assessment_files=session.get('assessment_files', [])
+        saved_custom_clos=session.get('custom_clos', [])
     )
 
 @app.route('/mapping', methods=['GET', 'POST'])
@@ -1921,12 +2190,14 @@ def mapping():
     total_students = report_metrics.get('total_students') or fallback_student_count
     total_questions = report_metrics.get('total_questions') or len(columns)
     max_scores = report_metrics.get('max_scores') or {}
+    detected_clo_mappings = report_metrics.get('detected_clo_mappings') or {}
     
     # Get CLOs for the selected course
     # Use custom edited CLOs if available, otherwise load from config
     course_clos = session.get('custom_clos')
     if not course_clos:
         course_clos = get_course_clos(course_name)
+    course_clos = list(course_clos or [])
 
     if request.method == 'POST':
         mapping_data = {}
@@ -1956,6 +2227,17 @@ def mapping():
         session.modified = True
         return redirect(url_for('results'))
 
+    existing_mapping = session.get('mapping', {})
+    if not existing_mapping and detected_clo_mappings:
+        existing_mapping = {
+            column: {
+                'clos': resolve_detected_clos_to_course_list(detected_clo_mappings.get(column, []), course_clos),
+                'max_score': max_scores.get(column, 1.0)
+            }
+            for column in columns
+            if resolve_detected_clos_to_course_list(detected_clo_mappings.get(column, []), course_clos)
+        }
+
     return render_template(
         'report_mapping.html',
         columns=columns,
@@ -1967,7 +2249,7 @@ def mapping():
         detection_confidence=report_metrics.get('confidence', 'Low'),
         detection_note=report_metrics.get('text_sample', ''),
         max_scores=max_scores,
-        existing_mapping=session.get('mapping', {}),
+        existing_mapping=existing_mapping,
         student_count_warning=report_metrics.get('student_count_warning', '')
     )
 

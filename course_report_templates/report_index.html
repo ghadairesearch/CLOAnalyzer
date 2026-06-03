@@ -134,19 +134,6 @@
         <div class="form-group">
             <label class="form-label">Assessment Files</label>
             <div class="assessment-upload-panel">
-                {% if saved_assessment_files %}
-                    <div style="border: 1px solid rgba(26, 101, 107, 0.25); border-radius: 6px; background: rgba(26, 101, 107, 0.06); padding: 0.75rem; margin-bottom: 0.75rem;">
-                        <div style="font-weight: 600; color: var(--accent); margin-bottom: 0.35rem;">Currently loaded files</div>
-                        <div style="display: grid; gap: 0.35rem;">
-                            {% for file in saved_assessment_files %}
-                                <div style="display: flex; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; color: var(--text-muted); font-size: 0.9rem;">
-                                    <span><strong style="color: var(--text-main);">{{ file.label }}</strong> - {{ file.original_name }}</span>
-                                    <span>{{ file.metrics.total_questions }} questions, {{ file.metrics.total_students }} students</span>
-                                </div>
-                            {% endfor %}
-                        </div>
-                    </div>
-                {% endif %}
                 <div class="assessment-upload-header">
                     <p style="font-size: 0.875rem; color: var(--text-muted); margin: 0;">Upload at least one grades file and select the assessment type for each file. PDF, CSV, and Excel files are supported.</p>
                 </div>
@@ -196,7 +183,6 @@
         const savedTargetPercentages = {{ saved_target_percentages|tojson }};
         const savedCustomClos = {{ saved_custom_clos|tojson }};
         const savedCourseName = {{ selected_course_name|tojson }};
-        const hasSavedAssessmentFiles = {{ 'true' if saved_assessment_files else 'false' }};
         let assessmentRowCounter = 1;
         
         let coursesData = [];
@@ -293,7 +279,7 @@
 
             const assessmentFiles = document.querySelectorAll('.assessment-file');
             const hasFile = Array.from(assessmentFiles).some(input => input.files.length > 0);
-            if (!hasFile && !hasSavedAssessmentFiles) {
+            if (!hasFile) {
                 event.preventDefault();
                 showTopError('Please upload at least one Quiz, Assignment, Midterm, Final, or Project file.');
             }
